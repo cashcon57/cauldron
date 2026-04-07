@@ -110,6 +110,82 @@ pub fn run_migrations(conn: &Connection) -> Result<(), SchemaError> {
         "ALTER TABLE proton_commits ADD COLUMN source TEXT NOT NULL DEFAULT 'proton';"
     );
 
+    // Game recommended settings table
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS game_recommended_settings (
+            steam_app_id       INTEGER PRIMARY KEY,
+            msync_enabled      INTEGER,
+            esync_enabled      INTEGER,
+            rosetta_x87        INTEGER,
+            async_shader       INTEGER,
+            metalfx_upscaling  INTEGER,
+            dxr_ray_tracing    INTEGER,
+            fsr_enabled        INTEGER,
+            large_address_aware INTEGER,
+            wine_dll_overrides TEXT NOT NULL DEFAULT '{}',
+            env_vars           TEXT NOT NULL DEFAULT '{}',
+            windows_version    TEXT,
+            launch_args        TEXT,
+            auto_apply_patches INTEGER
+        );"
+    )?;
+
+    // Migration: add cpu_topology to game_recommended_settings (Phase 2A)
+    let _ = conn.execute_batch(
+        "ALTER TABLE game_recommended_settings ADD COLUMN cpu_topology TEXT;"
+    );
+
+    // Migration: add required_dependencies to game_recommended_settings (Phase 3)
+    let _ = conn.execute_batch(
+        "ALTER TABLE game_recommended_settings ADD COLUMN required_dependencies TEXT NOT NULL DEFAULT '[]';"
+    );
+
+    // Migration: add registry_entries, exe_override, audio_latency_ms (Phase 4B)
+    let _ = conn.execute_batch(
+        "ALTER TABLE game_recommended_settings ADD COLUMN registry_entries TEXT NOT NULL DEFAULT '[]';"
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE game_recommended_settings ADD COLUMN exe_override TEXT;"
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE game_recommended_settings ADD COLUMN audio_latency_ms INTEGER;"
+    );
+
+    // Game binary patches table
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS game_binary_patches (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            steam_app_id    INTEGER NOT NULL,
+            exe_name        TEXT NOT NULL,
+            exe_hash        TEXT NOT NULL,
+            description     TEXT NOT NULL DEFAULT '',
+            search_pattern  BLOB NOT NULL,
+            replace_pattern BLOB NOT NULL,
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            patch_mode      TEXT NOT NULL DEFAULT 'pattern',
+            file_offset     INTEGER
+        );"
+    )?;
+
+    // Migration: add patch_mode and file_offset if table existed before this migration
+    let _ = conn.execute_batch(
+        "ALTER TABLE game_binary_patches ADD COLUMN patch_mode TEXT NOT NULL DEFAULT 'pattern';"
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE game_binary_patches ADD COLUMN file_offset INTEGER;"
+    );
+
+    // Game dependencies installed tracking table (Phase 3)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS game_deps_installed (
+            bottle_id      TEXT NOT NULL,
+            steam_app_id   INTEGER NOT NULL,
+            dependency_id  TEXT NOT NULL,
+            installed_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY(bottle_id, steam_app_id, dependency_id)
+        );"
+    )?;
+
     tracing::info!("Migrations complete");
     Ok(())
 }

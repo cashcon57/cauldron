@@ -1,4 +1,7 @@
-use crate::models::{CompatReportRecord, CompatStatus, GameRecord, GraphicsBackend, ProtonCommit};
+use crate::models::{
+    CompatReportRecord, CompatStatus, GameBinaryPatchRecord, GameRecommendedSettings,
+    GameRecord, GraphicsBackend, ProtonCommit,
+};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -538,6 +541,181 @@ pub fn mark_patch_reverted(conn: &Connection, hash: &str) -> Result<(), DbError>
     conn.execute(
         "UPDATE proton_commits SET applied = 0 WHERE hash = ?1",
         params![hash],
+    )?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Game recommended settings
+// ---------------------------------------------------------------------------
+
+/// Retrieve the recommended settings for a game by Steam app ID.
+pub fn get_game_settings(conn: &Connection, app_id: u32) -> Result<Option<GameRecommendedSettings>, DbError> {
+    tracing::debug!(app_id = app_id, "Looking up game recommended settings");
+    let mut stmt = conn.prepare(
+        "SELECT steam_app_id, msync_enabled, esync_enabled, rosetta_x87, async_shader,
+                metalfx_upscaling, dxr_ray_tracing, fsr_enabled, large_address_aware,
+                wine_dll_overrides, env_vars, windows_version, launch_args, auto_apply_patches,
+                cpu_topology, required_dependencies, registry_entries, exe_override, audio_latency_ms
+         FROM game_recommended_settings WHERE steam_app_id = ?1",
+    )?;
+
+    let mut rows = stmt.query_map(params![app_id], |row| {
+        Ok(GameRecommendedSettings {
+            steam_app_id: row.get(0)?,
+            msync_enabled: row.get::<_, Option<i32>>(1)?.map(|v| v != 0),
+            esync_enabled: row.get::<_, Option<i32>>(2)?.map(|v| v != 0),
+            rosetta_x87: row.get::<_, Option<i32>>(3)?.map(|v| v != 0),
+            async_shader: row.get::<_, Option<i32>>(4)?.map(|v| v != 0),
+            metalfx_upscaling: row.get::<_, Option<i32>>(5)?.map(|v| v != 0),
+            dxr_ray_tracing: row.get::<_, Option<i32>>(6)?.map(|v| v != 0),
+            fsr_enabled: row.get::<_, Option<i32>>(7)?.map(|v| v != 0),
+            large_address_aware: row.get::<_, Option<i32>>(8)?.map(|v| v != 0),
+            wine_dll_overrides: row.get::<_, String>(9).unwrap_or_else(|_| "{}".to_string()),
+            env_vars: row.get::<_, String>(10).unwrap_or_else(|_| "{}".to_string()),
+            windows_version: row.get(11)?,
+            launch_args: row.get(12)?,
+            auto_apply_patches: row.get::<_, Option<i32>>(13)?.map(|v| v != 0),
+            cpu_topology: row.get(14)?,
+            required_dependencies: row.get::<_, String>(15).unwrap_or_else(|_| "[]".to_string()),
+            registry_entries: row.get::<_, String>(16).unwrap_or_else(|_| "[]".to_string()),
+            exe_override: row.get(17)?,
+            audio_latency_ms: row.get(18)?,
+        })
+    })?;
+
+    match rows.next() {
+        Some(Ok(record)) => Ok(Some(record)),
+        Some(Err(e)) => Err(DbError::Sqlite(e)),
+        None => Ok(None),
+    }
+}
+
+/// Insert or update recommended settings for a game.
+pub fn upsert_game_settings(conn: &Connection, settings: &GameRecommendedSettings) -> Result<(), DbError> {
+    tracing::debug!(app_id = settings.steam_app_id, "Upserting game recommended settings");
+    conn.execute(
+        "INSERT OR REPLACE INTO game_recommended_settings
+         (steam_app_id, msync_enabled, esync_enabled, rosetta_x87, async_shader,
+          metalfx_upscaling, dxr_ray_tracing, fsr_enabled, large_address_aware,
+          wine_dll_overrides, env_vars, windows_version, launch_args, auto_apply_patches,
+          cpu_topology, required_dependencies, registry_entries, exe_override, audio_latency_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+        params![
+            settings.steam_app_id,
+            settings.msync_enabled.map(|b| b as i32),
+            settings.esync_enabled.map(|b| b as i32),
+            settings.rosetta_x87.map(|b| b as i32),
+            settings.async_shader.map(|b| b as i32),
+            settings.metalfx_upscaling.map(|b| b as i32),
+            settings.dxr_ray_tracing.map(|b| b as i32),
+            settings.fsr_enabled.map(|b| b as i32),
+            settings.large_address_aware.map(|b| b as i32),
+            settings.wine_dll_overrides,
+            settings.env_vars,
+            settings.windows_version,
+            settings.launch_args,
+            settings.auto_apply_patches.map(|b| b as i32),
+            settings.cpu_topology,
+            settings.required_dependencies,
+            settings.registry_entries,
+            settings.exe_override,
+            settings.audio_latency_ms,
+        ],
+    )?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Game binary patches
+// ---------------------------------------------------------------------------
+
+/// Retrieve binary patches for a game by Steam app ID and exe name.
+pub fn get_game_binary_patches(
+    conn: &Connection,
+    app_id: u32,
+    exe_name: &str,
+) -> Result<Vec<GameBinaryPatchRecord>, DbError> {
+    tracing::debug!(app_id = app_id, exe_name = %exe_name, "Looking up binary patches");
+    let mut stmt = conn.prepare(
+        "SELECT id, steam_app_id, exe_name, exe_hash, description, search_pattern,
+                replace_pattern, enabled, patch_mode, file_offset
+         FROM game_binary_patches
+         WHERE steam_app_id = ?1 AND exe_name = ?2 AND enabled = 1",
+    )?;
+
+    let patches = stmt
+        .query_map(params![app_id, exe_name], |row| {
+            Ok(GameBinaryPatchRecord {
+                id: row.get(0)?,
+                steam_app_id: row.get(1)?,
+                exe_name: row.get(2)?,
+                exe_hash: row.get(3)?,
+                description: row.get(4)?,
+                search_pattern: row.get(5)?,
+                replace_pattern: row.get(6)?,
+                enabled: row.get::<_, i32>(7)? != 0,
+                patch_mode: row.get::<_, String>(8).unwrap_or_else(|_| "pattern".to_string()),
+                file_offset: row.get(9)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(patches)
+}
+
+/// Insert a binary patch record.
+pub fn insert_game_binary_patch(conn: &Connection, patch: &GameBinaryPatchRecord) -> Result<(), DbError> {
+    conn.execute(
+        "INSERT INTO game_binary_patches
+         (steam_app_id, exe_name, exe_hash, description, search_pattern, replace_pattern, enabled, patch_mode, file_offset)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            patch.steam_app_id,
+            patch.exe_name,
+            patch.exe_hash,
+            patch.description,
+            patch.search_pattern,
+            patch.replace_pattern,
+            patch.enabled as i32,
+            patch.patch_mode,
+            patch.file_offset,
+        ],
+    )?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Game dependency tracking (Phase 3)
+// ---------------------------------------------------------------------------
+
+/// Get all installed dependency IDs for a game in a bottle.
+pub fn get_installed_deps(
+    conn: &Connection,
+    bottle_id: &str,
+    app_id: u32,
+) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT dependency_id FROM game_deps_installed
+         WHERE bottle_id = ?1 AND steam_app_id = ?2",
+    )?;
+    let deps = stmt
+        .query_map(params![bottle_id, app_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(deps)
+}
+
+/// Mark a dependency as installed for a game in a bottle.
+pub fn mark_dep_installed(
+    conn: &Connection,
+    bottle_id: &str,
+    app_id: u32,
+    dep_id: &str,
+) -> Result<(), DbError> {
+    conn.execute(
+        "INSERT OR IGNORE INTO game_deps_installed (bottle_id, steam_app_id, dependency_id)
+         VALUES (?1, ?2, ?3)",
+        params![bottle_id, app_id, dep_id],
     )?;
     Ok(())
 }

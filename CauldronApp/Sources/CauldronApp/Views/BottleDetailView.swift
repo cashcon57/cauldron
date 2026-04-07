@@ -14,6 +14,9 @@ struct BottleDetailView: View {
     @State private var detectedGames: [GameRecord] = []
     @State private var isScanning: Bool = false
     @State private var showOtherExes: Bool = false
+    @State private var d3dMetalInfo: CauldronBridge.D3DMetalInfo? = nil
+    @State private var d3dMetalImporting: Bool = false
+    @State private var showD3DMetalFilePicker: Bool = false
 
     var body: some View {
         ScrollView {
@@ -21,6 +24,7 @@ struct BottleDetailView: View {
                 bottleInfoCard
                 detectedGamesCard
                 graphicsCard
+                d3dMetalCard
                 syncCard
                 gameFixesCard
                 actionsCard
@@ -31,6 +35,7 @@ struct BottleDetailView: View {
         .onAppear {
             loadPerBottleSettings()
             scanForGames()
+            d3dMetalInfo = CauldronBridge.shared.detectD3DMetal()
         }
         .onChange(of: graphicsBackend) { _, newValue in
             saveSettingForBottle("graphicsBackend", value: newValue.rawValue)
@@ -121,6 +126,124 @@ struct BottleDetailView: View {
         }
     }
 
+    private var d3dMetalCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("D3DMetal / GPTK", systemImage: "rectangle.3.group")
+                .font(.headline)
+
+            if let info = d3dMetalInfo {
+                if info.source == "none" {
+                    // Not found — guide user to CrossOver
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                            Text("D3DMetal not found")
+                                .font(.subheadline.weight(.medium))
+                        }
+
+                        Text("D3DMetal is Apple's proprietary DirectX-to-Metal translator. It provides the best DX11/DX12 performance but cannot be distributed with Cauldron.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Text("Cauldron works best alongside CrossOver. Install CrossOver and D3DMetal will be imported automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 12) {
+                            Button {
+                                NSWorkspace.shared.open(URL(string: "https://www.codeweavers.com/crossover")!)
+                            } label: {
+                                Label("Get CrossOver", systemImage: "arrow.up.right")
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.plain)
+                            .glassEffect(.regular.tint(.blue).interactive(), in: .capsule)
+
+                            Button {
+                                showD3DMetalFilePicker = true
+                            } label: {
+                                Label("Import Custom", systemImage: "folder")
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.plain)
+                            .glassEffect(.regular.interactive(), in: .capsule)
+                        }
+                        .padding(.top, 4)
+                    }
+                } else {
+                    // Found or imported
+                    HStack(spacing: 8) {
+                        Image(systemName: info.source == "imported" ? "checkmark.circle.fill" : "arrow.down.circle.fill")
+                            .foregroundStyle(.green)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(info.label)
+                                .font(.subheadline.weight(.medium))
+                            Text(info.path)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                        if !info.imported {
+                            Button {
+                                d3dMetalImporting = true
+                                let bridge = CauldronBridge.shared
+                                Task.detached {
+                                    let result = bridge.importD3DMetal()
+                                    await MainActor.run {
+                                        d3dMetalImporting = false
+                                        d3dMetalInfo = CauldronBridge.shared.detectD3DMetal()
+                                    }
+                                }
+                            } label: {
+                                if d3dMetalImporting {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Text("Import")
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(d3dMetalImporting)
+                            .glassEffect(.regular.tint(.green).interactive(), in: .capsule)
+                        }
+                    }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Detecting D3DMetal...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .fileImporter(isPresented: $showD3DMetalFilePicker, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result {
+                let frameworkPath = url.path.hasSuffix("D3DMetal.framework")
+                    ? url.path
+                    : url.appendingPathComponent("D3DMetal.framework").path
+                d3dMetalImporting = true
+                let bridge = CauldronBridge.shared
+                Task.detached {
+                    let _ = bridge.importD3DMetal(customPath: frameworkPath)
+                    await MainActor.run {
+                        d3dMetalImporting = false
+                        d3dMetalInfo = CauldronBridge.shared.detectD3DMetal()
+                    }
+                }
+            }
+        }
+    }
+
     private var syncCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Synchronization", systemImage: "arrow.triangle.2.circlepath")
@@ -193,28 +316,160 @@ struct BottleDetailView: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 
+    @State private var showDependencyPicker = false
+    @State private var installingDependency: String? = nil
+
+    @State private var bottleRunning = false
+    @State private var runningCheckTimer: Timer? = nil
+
     private var actionsCard: some View {
         GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 12) {
-                Button {
-                    selectAndLaunchExe()
-                } label: {
-                    Label("Launch...", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.tint(.green).interactive(), in: .capsule)
+            VStack(spacing: 10) {
+                // Running state indicator — always visible
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(bottleRunning ? .green : .gray.opacity(0.3))
+                        .frame(width: 8, height: 8)
+                    Text(bottleRunning ? "Wine is running" : "Wine is not running")
+                        .font(.caption)
+                        .foregroundStyle(bottleRunning ? .green : .secondary)
+                    Spacer()
 
-                Button {
-                    openBottleFolder()
-                } label: {
-                    Label("Open Folder", systemImage: "folder")
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 12)
+                    if bottleRunning {
+                        Button {
+                            killWine()
+                        } label: {
+                            Label("Stop Wine", systemImage: "stop.fill")
+                                .font(.caption)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.tint(.red).interactive(), in: .capsule)
+                    }
                 }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .capsule)
+
+                HStack(spacing: 12) {
+                    Button {
+                        selectAndLaunchExe()
+                    } label: {
+                        Label("Run .exe", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!(licenseManager?.status.canLaunchGames ?? true))
+                    .glassEffect(.regular.tint(.green).interactive(), in: .capsule)
+
+                    Button {
+                        killWine()
+                    } label: {
+                        Label("Kill Wine", systemImage: "xmark.circle.fill")
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(.red).interactive(), in: .capsule)
+                    .help("Kill all Wine/wineserver processes for this bottle")
+
+                    Button {
+                        showDependencyPicker = true
+                    } label: {
+                        Label("Install Deps", systemImage: "shippingbox")
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(.blue).interactive(), in: .capsule)
+
+                    Button {
+                        openBottleFolder()
+                    } label: {
+                        Label("Open Folder", systemImage: "folder")
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .capsule)
+                }
+            }
+        }
+        .onAppear { checkWineRunning(); startRunningCheck() }
+        .onDisappear { runningCheckTimer?.invalidate() }
+        .sheet(isPresented: $showDependencyPicker) {
+            DependencyPickerSheet(bottleId: bottle.id, installingId: $installingDependency)
+        }
+    }
+
+    /// Kill Wine using both Cauldron's tracker AND wineserver --kill on the bottle path.
+    private func killWine() {
+        // Kill via Cauldron's PID tracker
+        let _ = CauldronBridge.shared.killBottle(bottleId: bottle.id)
+
+        // Also kill any wineserver whose WINEPREFIX matches this bottle.
+        // This catches processes launched outside Cauldron (e.g. via CrossOver).
+        let bottlePath = bottle.path
+        Task.detached {
+            // Find wineserver processes and kill them
+            let ps = Process()
+            ps.executableURL = URL(fileURLWithPath: "/bin/sh")
+            ps.arguments = ["-c", """
+                # Kill wineserver for this prefix
+                for ws in $(pgrep -f wineserver); do
+                    kill -TERM $ws 2>/dev/null
+                done
+                # Also kill any wine processes
+                pkill -TERM -f "winedevice" 2>/dev/null
+                pkill -TERM -f "wine64-preloader" 2>/dev/null
+                pkill -TERM -f "wineloader" 2>/dev/null
+                # Try wineserver --kill with the bottle's prefix
+                WINEPREFIX="\(bottlePath)" /Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wineserver --kill 2>/dev/null
+                WINEPREFIX="\(bottlePath)" /opt/homebrew/bin/wineserver --kill 2>/dev/null
+                true
+                """]
+            try? ps.run()
+            ps.waitUntilExit()
+
+            await MainActor.run {
+                bottleRunning = false
+                // Re-check after a moment
+                Task {
+                    try? await Task.sleep(for: .seconds(1))
+                    checkWineRunning()
+                }
+            }
+        }
+    }
+
+    /// Check if Wine is running by looking for wineserver/winedevice processes.
+    private func checkWineRunning() {
+        // Check via Cauldron's tracker first
+        if CauldronBridge.shared.isBottleRunning(bottleId: bottle.id) {
+            bottleRunning = true
+            return
+        }
+
+        // Also check system-wide for any wineserver (catches CrossOver-launched processes)
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        ps.arguments = ["-f", "wineserver"]
+        let pipe = Pipe()
+        ps.standardOutput = pipe
+        ps.standardError = FileHandle.nullDevice
+        do {
+            try ps.run()
+            ps.waitUntilExit()
+            bottleRunning = ps.terminationStatus == 0
+        } catch {
+            bottleRunning = false
+        }
+    }
+
+    /// Poll running state every 3 seconds so the UI stays current.
+    private func startRunningCheck() {
+        runningCheckTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+            Task { @MainActor in
+                checkWineRunning()
             }
         }
     }
@@ -285,6 +540,8 @@ struct BottleDetailView: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 
+    @Environment(LicenseManager.self) private var licenseManager: LicenseManager?
+
     private func gameRow(_ game: GameRecord) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
@@ -299,7 +556,6 @@ struct BottleDetailView: View {
                 }
             }
             Spacer()
-            // Only show badge when there's a meaningful status
             if !game.compatStatus.isEmpty && game.compatStatus.lowercased() != "unknown" {
                 Text(game.compatStatus.capitalized)
                     .font(.caption)
@@ -309,8 +565,51 @@ struct BottleDetailView: View {
                     .foregroundStyle(statusColor(for: game.compatStatus))
                     .clipShape(Capsule())
             }
+            // Play button — extracts exe path from game.notes (pipe-delimited)
+            if let exePath = extractExePath(from: game) {
+                Button {
+                    launchGame(exePath: exePath)
+                } label: {
+                    Image(systemName: "play.fill")
+                        .padding(6)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(.green).interactive(), in: .circle)
+                .disabled(!(licenseManager?.status.canLaunchGames ?? true))
+                .help(licenseManager?.status.canLaunchGames ?? true ? "Launch \(game.title)" : "Activate Cauldron to launch games")
+            }
         }
         .padding(.vertical, 4)
+    }
+
+    private func extractExePath(from game: GameRecord) -> String? {
+        // notes field stores exe path (from game scanner)
+        let notes = game.notes
+        if notes.isEmpty { return nil }
+        // If it contains pipe delimiter, exe path is the first component
+        let components = notes.split(separator: "|").map(String.init)
+        if let path = components.first, path.contains("/") || path.contains("\\") {
+            return path
+        }
+        return notes.contains(".exe") ? notes : nil
+    }
+
+    private func launchGame(exePath: String) {
+        // Build settings from global profile with the bottle's selected backend
+        let settings = CauldronBridge.LaunchSettings.from(
+            appSettings: .shared,
+            perGame: nil,
+            backend: graphicsBackend
+        )
+        let success = CauldronBridge.shared.launchExe(
+            bottleId: bottle.id,
+            exePath: exePath,
+            settings: settings
+        )
+        if !success {
+            launchErrorMessage = "Failed to launch game. Check that Wine is installed."
+            showLaunchError = true
+        }
     }
 
     private func statusColor(for status: String) -> Color {
@@ -415,10 +714,15 @@ struct BottleDetailView: View {
                 }
             }
 
+            let settings = CauldronBridge.LaunchSettings.from(
+                appSettings: .shared,
+                perGame: nil,
+                backend: graphicsBackend
+            )
             let success = CauldronBridge.shared.launchExe(
                 bottleId: bottle.id,
                 exePath: url.path,
-                backend: graphicsBackend.rawValue
+                settings: settings
             )
 
             if !success {

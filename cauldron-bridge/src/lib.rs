@@ -798,6 +798,8 @@ pub extern "C" fn cauldron_launch_exe(
         backend: gfx_backend,
         dxvk_async: true,
         metalfx_spatial: false,
+        metalfx_upscale_factor: 2.0,
+        dlss_metalfx: false,
         metal_hud: false,
         dxr_enabled: false,
         mvk_argument_buffers: true,
@@ -808,7 +810,72 @@ pub extern "C" fn cauldron_launch_exe(
     // Add bottle env overrides
     env_vars.extend(bottle.env_overrides.clone());
 
-    let exe_path = PathBuf::from(exe);
+    let mut exe_path = PathBuf::from(exe);
+
+    // Resolve game-specific launch config from the database.
+    // Try to detect steam_app_id from the exe path (e.g. steamapps/common/<game>/...)
+    // and merge recommended settings into the launch environment.
+    if let Ok(conn) = cauldron_db::init_db(&engine.db_path) {
+        let steam_app_id = detect_steam_app_id(&exe_path, &conn);
+        if let Some(app_id) = steam_app_id {
+            let exe_name = exe_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let config = cauldron_core::launch_config_resolver::resolve(
+                &conn, app_id, exe_name, None,
+            );
+            tracing::info!(app_id = app_id, "Resolved launch config from DB");
+
+            // Apply resolved env vars and DLL overrides
+            config.apply_to_env(&mut env_vars);
+
+            // Apply exe_replacement if set (swap to a different exe within the game dir)
+            if let Some(ref replacement) = config.exe_replacement {
+                if let Some(parent) = exe_path.parent() {
+                    let new_exe = parent.join(replacement);
+                    if new_exe.exists() {
+                        tracing::info!(
+                            original = %exe_path.display(),
+                            replacement = %new_exe.display(),
+                            "Applying exe replacement from launch config"
+                        );
+                        exe_path = new_exe;
+                    } else {
+                        tracing::warn!(
+                            replacement = %new_exe.display(),
+                            "Exe replacement path does not exist, using original"
+                        );
+                    }
+                }
+            }
+
+            // Apply windows_version via registry if set
+            if let Some(ref win_ver) = config.windows_version {
+                let version_reg = bottle.path.join(".cauldron_winver.reg");
+                let (major, minor, build) = windows_version_to_nt(win_ver);
+                let reg_content = format!(
+                    "Windows Registry Editor Version 5.00\n\n\
+                     [HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows NT\\CurrentVersion]\n\
+                     \"CurrentVersion\"=\"{}.{}\"\n\
+                     \"CurrentBuild\"=\"{}\"\n\
+                     \"CurrentBuildNumber\"=\"{}\"\n",
+                    major, minor, build, build
+                );
+                if let Err(e) = std::fs::write(&version_reg, &reg_content) {
+                    tracing::warn!("Failed to write windows version reg file: {e}");
+                }
+            }
+
+            // Log required dependencies (actual installation is handled separately)
+            if !config.required_dependencies.is_empty() {
+                tracing::info!(
+                    deps = ?config.required_dependencies,
+                    "Game requires dependencies"
+                );
+            }
+        }
+    }
 
     // Spawn Wine process synchronously (non-async) using std::process::Command
     match std::process::Command::new(&wine_bin)
@@ -824,6 +891,50 @@ pub extern "C" fn cauldron_launch_exe(
             tracing::error!(exe = %exe_path.display(), error = %e, "Failed to spawn Wine process");
             -1
         }
+    }
+}
+
+/// Try to detect the Steam app ID from an exe path by checking if it matches
+/// a known game in the database. Looks at the path for patterns like
+/// `steamapps/common/<game>/` and cross-references the DB.
+fn detect_steam_app_id(exe_path: &std::path::Path, conn: &cauldron_db::Connection) -> Option<u32> {
+    // Try to find a Steam app ID by scanning all known games and matching exe path components
+    let path_str = exe_path.to_string_lossy().to_lowercase();
+
+    // Quick check: if path contains "steamapps" we can try to extract info
+    if !path_str.contains("steamapps") {
+        return None;
+    }
+
+    // List all games and see if any title matches a path component
+    let games = cauldron_db::list_all_games(conn).ok()?;
+    for game in &games {
+        if let Some(app_id) = game.steam_app_id {
+            // Check if the settings table has an entry for this app_id
+            if let Ok(Some(_)) = cauldron_db::get_game_settings(conn, app_id) {
+                // Simple heuristic: game title words appear in the path
+                let title_lower = game.title.to_lowercase();
+                let title_words: Vec<&str> = title_lower.split_whitespace().collect();
+                if title_words.len() >= 2 && title_words.iter().all(|w| path_str.contains(w)) {
+                    return Some(app_id);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Map a Wine windows version string to NT version numbers.
+fn windows_version_to_nt(version: &str) -> (&str, &str, &str) {
+    match version {
+        "winxp" => ("5", "1", "2600"),
+        "win7" => ("6", "1", "7601"),
+        "win8" => ("6", "2", "9200"),
+        "win81" => ("6", "3", "9600"),
+        "win10" => ("10", "0", "19041"),
+        "win11" => ("10", "0", "22000"),
+        _ => ("10", "0", "19041"), // Default to win10
     }
 }
 

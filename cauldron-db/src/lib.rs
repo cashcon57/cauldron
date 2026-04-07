@@ -7,3 +7,6 @@ pub use models::*;
 pub use queries::*;
 pub use schema::*;
 pub use sync_status::*;
+
+/// Re-export rusqlite::Connection for downstream crates.
+pub use rusqlite::Connection;
