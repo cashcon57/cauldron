@@ -4,6 +4,8 @@
 Cargo.lock
 
 # Swift / Xcode
+.build/
+.swiftpm/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
 DerivedData/
@@ -18,6 +20,11 @@ DerivedData/
 *.dSYM.zip
 *.dSYM
 
+# Python
+__pycache__/
+*.pyc
+.venv/
+
 # macOS
 .DS_Store
 *.swp
@@ -27,6 +34,7 @@ DerivedData/
 # Build artifacts
 /build/
 /dist/
+/include/cauldron.h
 
 # IDE
 .idea/
@@ -40,6 +48,17 @@ DerivedData/
 *.db
 *.sqlite
 *.sqlite3
+
+# Distribution
+*.dmg
+*.zip
+
+# Cloned dependencies (large repos, not tracked)
+/dxvk/
+/dxmt/
+/moltenvk/
+/deps/
+/wine/
 
 # Environment
 .env

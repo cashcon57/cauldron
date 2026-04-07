@@ -1,0 +1,24 @@
+[package]
+name = "cauldron-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+cauldron-core = { path = "../cauldron-core" }
+cauldron-db = { path = "../cauldron-db" }
+cauldron-sync = { path = "../cauldron-sync" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+tracing = { workspace = true }
+git2 = "0.19"
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+cbindgen = "0.27"
