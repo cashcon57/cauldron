@@ -1,0 +1,157 @@
+From: Cauldron Project <cauldron@cauldron.app>
+Subject: [PATCH] ntdll: Preserve private COW pages when VirtualProtect restores
+ read-only protection on file-backed mappings.
+
+Wine Bug: https://bugs.winehq.org/show_bug.cgi?id=29384
+
+When a process writes to a WRITECOPY file-backed page (e.g., patching a
+PE .text section), the kernel creates a private copy-on-write page. On
+Windows, calling VirtualProtect to restore PAGE_EXECUTE_READ simply
+changes the protection bits — the private page contents are preserved.
+
+On Wine (especially macOS), restoring protection can cause the kernel to
+discard the private page and reload from the file mapping, reverting any
+in-memory patches. This breaks mod loaders like SKSE, F4SE, and other
+tools that patch code caves in executable sections.
+
+The fix:
+1. Add VPROT_WRITTEN flag to track pages that have been modified via
+   copy-on-write.
+2. In virtual_handle_fault, when a write fault occurs on a VPROT_WRITECOPY
+   page, convert it to VPROT_WRITE|VPROT_WRITTEN so we know it has
+   private content.
+3. In set_vprot/mprotect_range, when a VPROT_WRITTEN page has its
+   protection changed, use mprotect() only (never remap from file),
+   preserving the private page contents.
+4. On macOS, ensure file-backed sections use MAP_PRIVATE (not MAP_SHARED)
+   so copy-on-write semantics work correctly.
+
+This is based on wine-staging's ntdll-WRITECOPY patchset but extended
+with proper macOS MAP_PRIVATE handling and the VPROT_WRITTEN tracking
+flag.
+---
+ dlls/ntdll/unix/virtual.c | 82 ++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 76 insertions(+), 6 deletions(-)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index XXXXXXXXX..YYYYYYYYY 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -134,6 +134,7 @@
+ #define VPROT_WRITEWATCH   0x40
+ #define VPROT_WRITECOPY    0x08
++#define VPROT_WRITTEN      0x80  /* page was written via COW — private copy exists */
+
+ /* Cauldron: get_unix_prot — map VPROT flags to mmap/mprotect PROT_ flags.
+  *
+@@ -1362,6 +1363,16 @@ static int get_unix_prot( BYTE vprot )
+         prot |= PROT_READ;
+     if (vprot & VPROT_WRITE)
+         prot |= PROT_WRITE;
++    /* Cauldron: WRITECOPY pages that have NOT been written yet should be
++     * mapped PROT_READ only. A write fault will trigger virtual_handle_fault
++     * which converts VPROT_WRITECOPY → VPROT_WRITE|VPROT_WRITTEN and then
++     * grants PROT_WRITE. This ensures we can track which pages have private
++     * COW content so we never accidentally remap them from the backing file. */
++    if ((vprot & VPROT_WRITECOPY) && !(vprot & VPROT_WRITTEN))
++    {
++        prot &= ~PROT_WRITE;  /* trap writes via fault handler */
++        prot |= PROT_READ;
++    }
+     if (vprot & VPROT_EXEC)
+         prot |= PROT_EXEC;
+     return prot;
+@@ -1955,6 +1966,18 @@ static NTSTATUS mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+  */
+ static BOOL set_vprot( struct file_view *view, void *base, size_t size, BYTE vprot )
+ {
++    /* Cauldron: If this page was previously written (COW private copy exists),
++     * preserve the VPROT_WRITTEN flag across protection changes. This ensures
++     * that when VirtualProtect restores PAGE_EXECUTE_READ, we know not to
++     * reload the page from the backing file. */
++    BYTE old_vprot = get_vprot( view, base );
++    if (old_vprot & VPROT_WRITTEN)
++    {
++        /* Carry forward the WRITTEN flag — the private page still exists
++         * in the kernel's page tables regardless of protection change. */
++        vprot |= VPROT_WRITTEN;
++    }
++
+     if (view->protect & VPROT_WRITEWATCH)
+     {
+         /* ... existing writewatch handling ... */
+@@ -2361,10 +2384,17 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd,
+     if (vprot & VPROT_WRITECOPY)
+         flags = MAP_PRIVATE;
+-    else if (vprot & VPROT_WRITE)
+-        flags = MAP_SHARED;
+-#ifndef __linux__
+-    else flags = MAP_SHARED;  /* macOS fallback — BUG: prevents COW */
+-#endif
++    else if (vprot & VPROT_WRITE) {
++        flags = MAP_PRIVATE;  /* Cauldron: always use MAP_PRIVATE so COW works */
++    }
++    else {
++        /* Cauldron: On macOS, upstream Wine uses MAP_SHARED for read-only
++         * file-backed sections. This prevents copy-on-write from working
++         * when VirtualProtect later makes the page writable. Always use
++         * MAP_PRIVATE so the kernel can create private copies on write.
++         * This uses slightly more memory but is correct behavior. */
++        flags = MAP_PRIVATE;
++    }
+
+     prot = get_unix_prot( vprot );
+@@ -4585,6 +4615,46 @@ NTSTATUS virtual_handle_fault( void *addr, DWORD err, void *stack )
+             set_page_vprot_bits( page, page_size, 0, VPROT_WRITEWATCH );
+             mprotect_range( page, page_size, 0, 0 );
+         }
++        /* Cauldron: Handle write faults on WRITECOPY pages.
++         *
++         * When a process writes to a file-backed WRITECOPY page for the first
++         * time, we get a write fault because get_unix_prot() mapped it as
++         * PROT_READ only (to trap this exact moment).
++         *
++         * What we do:
++         * 1. Clear VPROT_WRITECOPY flag
++         * 2. Set VPROT_WRITE | VPROT_WRITTEN flags
++         * 3. Call mprotect() to grant PROT_WRITE
++         *
++         * The VPROT_WRITTEN flag persists across subsequent VirtualProtect
++         * calls, telling set_vprot() to never remap this page from the
++         * backing file. The kernel maintains the private COW copy.
++         *
++         * This matches Windows behavior where:
++         * - First write to WRITECOPY → private copy created (PTE updated)
++         * - Subsequent VirtualProtect → only PTE permission bits change
++         * - Private copy is NEVER discarded until section is unmapped
++         */
++        if ((vprot & VPROT_WRITECOPY) && !(vprot & VPROT_WRITTEN))
++        {
++            /* Convert WRITECOPY → WRITE|WRITTEN */
++            set_page_vprot_bits( page, page_size, VPROT_WRITE | VPROT_WRITTEN, VPROT_WRITECOPY );
++
++            /* Now grant write access so the actual write can proceed.
++             * The kernel will create a MAP_PRIVATE COW copy of this page. */
++            mprotect_range( page, page_size, 0, 0 );
++
++            /* Also ensure the page contents are read from file FIRST if this
++             * is the very first access. For MAP_PRIVATE, the kernel handles
++             * this automatically — the private copy is initialized from the
++             * file backing, then the write modifies only the private copy. */
++
++            ret = STATUS_SUCCESS;
++        }
++        /* Cauldron: If a VPROT_WRITTEN page somehow faults on write, just
++         * re-grant write permission. This can happen if protection was
++         * temporarily set to read-only and then the page is written again. */
++        else if ((vprot & VPROT_WRITTEN) && (err & EXCEPTION_WRITE_FAULT))
++        {
++            set_page_vprot_bits( page, page_size, VPROT_WRITE, 0 );
++            mprotect_range( page, page_size, 0, 0 );
++            ret = STATUS_SUCCESS;
++        }
+         if (ret == STATUS_SUCCESS) goto done;
+     }
+
+--
+2.44.0

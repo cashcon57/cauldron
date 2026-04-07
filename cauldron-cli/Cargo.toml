@@ -1,0 +1,22 @@
+[package]
+name = "cauldron-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cauldron"
+path = "src/main.rs"
+
+[dependencies]
+cauldron-core = { path = "../cauldron-core" }
+cauldron-sync = { path = "../cauldron-sync" }
+cauldron-db = { path = "../cauldron-db" }
+clap = { version = "4", features = ["derive"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+serde_json = { workspace = true }
+anyhow = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+dirs = "5"
+clap_complete = "4"

@@ -1,0 +1,41 @@
+name: Nightly Sync
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-and-build:
+    name: Nightly Sync & Build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check for new Proton commits
+        run: |
+          echo "TODO: implement proton monitor CLI"
+          echo "This step will eventually run cauldron-sync to pull"
+          echo "new commits from the Proton repository and classify them."
+
+      - name: Build nightly
+        run: cargo build --release --workspace
+
+      - name: Run smoke tests
+        run: cargo test --workspace
+
+      # - name: Create nightly release
+      #   env:
+      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #   run: |
+      #     TAG="nightly-$(date +%Y%m%d)"
+      #     gh release create "$TAG" \
+      #       --title "Nightly $TAG" \
+      #       --notes "Automated nightly build" \
+      #       --prerelease \
+      #       target/release/cauldron-*
