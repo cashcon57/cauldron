@@ -20,6 +20,20 @@ pub enum FixAction {
     DisableNvapi,
     /// Create a file at a relative path with given content.
     CreateFile { path: String, content: String },
+    /// Rename a file within the bottle.
+    RenameFile { from: String, to: String },
+    /// Delete a file within the bottle.
+    DeleteFile { path: String },
+    /// Copy a file within the bottle.
+    CopyFile { from: String, to: String },
+    /// Set a registry key in the Wine prefix.
+    SetRegistry {
+        hive: String,
+        key: String,
+        name: String,
+        reg_type: String,
+        data: String,
+    },
     /// An unrecognized line from the script, preserved as-is.
     Unknown(String),
 }
@@ -172,6 +186,75 @@ pub fn apply_fix_to_bottle(
                     fs::create_dir_all(parent)?;
                 }
                 fs::write(&full_path, content)?;
+            }
+            FixAction::RenameFile { from, to } => {
+                let src = bottle_path.join(from);
+                let dst = bottle_path.join(to);
+                tracing::info!("renaming {} -> {}", src.display(), dst.display());
+                if src.exists() {
+                    if let Some(parent) = dst.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::rename(&src, &dst)?;
+                } else {
+                    tracing::warn!("rename source not found: {}", src.display());
+                }
+            }
+            FixAction::DeleteFile { path } => {
+                let target = bottle_path.join(path);
+                tracing::info!("deleting {}", target.display());
+                if target.exists() {
+                    fs::remove_file(&target)?;
+                } else {
+                    tracing::debug!("delete target not found: {}", target.display());
+                }
+            }
+            FixAction::CopyFile { from, to } => {
+                let src = bottle_path.join(from);
+                let dst = bottle_path.join(to);
+                tracing::info!("copying {} -> {}", src.display(), dst.display());
+                if src.exists() {
+                    if let Some(parent) = dst.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    fs::copy(&src, &dst)?;
+                } else {
+                    tracing::warn!("copy source not found: {}", src.display());
+                }
+            }
+            FixAction::SetRegistry { hive, key, name, reg_type, data } => {
+                tracing::info!("setting registry: {}\\{}\\{} = {} ({})", hive, key, name, data, reg_type);
+                // Write a .reg file and import it
+                let reg_file = bottle_path.join(".cauldron_temp.reg");
+                let hive_prefix = match hive.as_str() {
+                    "HKCU" | "HKEY_CURRENT_USER" => "HKEY_CURRENT_USER",
+                    "HKLM" | "HKEY_LOCAL_MACHINE" => "HKEY_LOCAL_MACHINE",
+                    other => other,
+                };
+                let reg_type_str = match reg_type.as_str() {
+                    "REG_SZ" | "sz" => "\"",
+                    "REG_DWORD" | "dword" => "dword:",
+                    other => {
+                        tracing::warn!("unsupported registry type: {}", other);
+                        "\""
+                    }
+                };
+                let value_str = if reg_type_str == "dword:" {
+                    format!("\"{}\"={}{}", name, reg_type_str, data)
+                } else {
+                    format!("\"{}\"=\"{}\"", name, data)
+                };
+                let reg_content = format!(
+                    "Windows Registry Editor Version 5.00\n\n[{}\\{}]\n{}\n",
+                    hive_prefix, key, value_str
+                );
+                fs::write(&reg_file, &reg_content)?;
+                // The actual regedit import would happen at Wine launch time;
+                // store the path as a hint for the launcher.
+                env.insert(
+                    "CAULDRON_REG_IMPORT".to_string(),
+                    reg_file.to_string_lossy().to_string(),
+                );
             }
             FixAction::Unknown(line) => {
                 tracing::debug!("unhandled fix action: {}", line);

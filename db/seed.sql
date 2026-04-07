@@ -82,3 +82,132 @@ INSERT INTO games (steam_app_id, title, backend, compat_status, known_issues, no
 (1687950, 'Persona 5 Royal', 'DXMT', 'Platinum',
  NULL,
  'DX11 title. Runs perfectly. No issues reported across full playthrough.');
+
+-- ============================================================================
+-- Game Recommended Settings (game_recommended_settings table)
+-- ============================================================================
+
+-- Sync disable games
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, msync_enabled, esync_enabled) VALUES
+(7670, 0, 0);      -- BioShock 1
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, msync_enabled, esync_enabled) VALUES
+(409720, 0, 0);    -- BioShock 2 Remastered
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, msync_enabled) VALUES
+(638970, 0);       -- Yakuza 0
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, msync_enabled) VALUES
+(834530, 0);       -- Yakuza Kiwami
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, esync_enabled) VALUES
+(49520, 0);        -- Borderlands 2
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, esync_enabled) VALUES
+(261640, 0);       -- Borderlands: The Pre-Sequel
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, msync_enabled, esync_enabled) VALUES
+(214950, 0, 0);    -- Total War: Rome II
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, msync_enabled, esync_enabled) VALUES
+(9350, 0, 0);      -- Supreme Commander
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, msync_enabled, esync_enabled) VALUES
+(311730, 0, 0);    -- Dead or Alive 5
+
+-- Windows version games
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, windows_version) VALUES
+(105450, 'winxp');  -- Age of Empires 3
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, windows_version) VALUES
+(211420, 'win7');   -- Dark Souls PTDE
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, windows_version) VALUES
+(495420, 'win7');   -- State of Decay 2
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, windows_version) VALUES
+(281280, 'winxp');  -- Mashed
+
+-- CPU topology games
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES
+(19900, '16:1');    -- Far Cry 2
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES
+(220240, '24:1');   -- Far Cry 3
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES
+(298110, '16:1');   -- Far Cry 4
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES
+(552520, '16:1');   -- Far Cry 5
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES
+(371660, '31:1');   -- Far Cry Primal
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES
+(233270, '24:1');   -- Far Cry Blood Dragon
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES
+(15620, '8:1');     -- Dawn of War II
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES
+(94400, '8:1');     -- Prototype
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES
+(242760, '4:1');    -- The Forest
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES
+(424840, '1:1');    -- Little Nightmares
+
+-- Vendor ID spoofing + launch args
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, env_vars, launch_args) VALUES
+(1659040, '{"DXVK_CUSTOM_VENDOR_ID": "10de"}', '--skip-version-check');  -- HITMAN 3
+
+-- Launcher bypasses (exe_override)
+-- Borderlands 2 already exists from sync disable, update with exe_override
+UPDATE game_recommended_settings SET exe_override = 'Binaries/Win32/Borderlands2.exe' WHERE steam_app_id = 49520;
+
+-- Borderlands TPS already exists from sync disable, update with exe_override
+UPDATE game_recommended_settings SET exe_override = 'Binaries/Win32/BorderlandsPreSequel.exe' WHERE steam_app_id = 261640;
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, exe_override) VALUES
+(440900, 'ConanSandbox/Binaries/Win64/ConanSandbox.exe');  -- Conan Exiles
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, exe_override) VALUES
+(700600, 'evilgenius_vulkan.exe');  -- Evil Genius 2
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, exe_override) VALUES
+(312670, 'StrangeBrigade_Vulkan.exe');  -- Strange Brigade
+
+-- Audio latency games
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, audio_latency_ms, required_dependencies) VALUES
+(377840, 60, '["vcrun2019", "quartz", "lavfilters"]');  -- Final Fantasy IX
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, audio_latency_ms, required_dependencies) VALUES
+(268050, 90, '["quartz"]');  -- The Evil Within
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, audio_latency_ms) VALUES
+(65540, 60);   -- Gothic
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, audio_latency_ms) VALUES
+(244210, 60);  -- Assetto Corsa
+
+-- Required dependencies: AAA games
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, required_dependencies) VALUES
+(1593500, '["vcrun2022", "d3dcompiler_47"]');  -- God of War
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, required_dependencies) VALUES
+(1151640, '["vcrun2019"]');  -- Horizon Zero Dawn
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, required_dependencies) VALUES
+(1817070, '["vcrun2022", "d3dcompiler_47"]');  -- Spider-Man Remastered
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, required_dependencies) VALUES
+(1293830, '["vcrun2019"]');  -- Forza Horizon 4
+
+-- Media codec games
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, required_dependencies) VALUES
+(418370, '["quartz", "lavfilters"]');  -- Resident Evil 7
+
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, required_dependencies) VALUES
+(631510, '["quartz", "lavfilters"]');  -- DMC HD Collection

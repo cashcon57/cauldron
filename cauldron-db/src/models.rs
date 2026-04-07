@@ -133,3 +133,44 @@ pub struct ProtonCommit {
 }
 
 fn default_source() -> String { "proton".to_string() }
+
+/// Recommended settings for a game, stored in the game_recommended_settings table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameRecommendedSettings {
+    pub steam_app_id: u32,
+    pub msync_enabled: Option<bool>,
+    pub esync_enabled: Option<bool>,
+    pub rosetta_x87: Option<bool>,
+    pub async_shader: Option<bool>,
+    pub metalfx_upscaling: Option<bool>,
+    pub dxr_ray_tracing: Option<bool>,
+    pub fsr_enabled: Option<bool>,
+    pub large_address_aware: Option<bool>,
+    /// JSON object of DLL overrides: {"dll_name": "mode"}
+    pub wine_dll_overrides: String,
+    /// JSON object of extra environment variables: {"KEY": "VALUE"}
+    pub env_vars: String,
+    pub windows_version: Option<String>,
+    pub launch_args: Option<String>,
+    pub auto_apply_patches: Option<bool>,
+    pub cpu_topology: Option<String>,
+    pub required_dependencies: String,
+    pub registry_entries: String,
+    pub exe_override: Option<String>,
+    pub audio_latency_ms: Option<i32>,
+}
+
+/// A record from the game_binary_patches table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameBinaryPatchRecord {
+    pub id: i64,
+    pub steam_app_id: u32,
+    pub exe_name: String,
+    pub exe_hash: String,
+    pub description: String,
+    pub search_pattern: Vec<u8>,
+    pub replace_pattern: Vec<u8>,
+    pub enabled: bool,
+    pub patch_mode: String,
+    pub file_offset: Option<i64>,
+}

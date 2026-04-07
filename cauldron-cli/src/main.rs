@@ -905,6 +905,10 @@ async fn handle_sync(action: SyncAction) -> Result<()> {
                         cauldron_sync::protonfixes::FixAction::AppendArgument(a) => format!("arg({a})"),
                         cauldron_sync::protonfixes::FixAction::ReplaceCommand { to, .. } => format!("replace->{to}"),
                         cauldron_sync::protonfixes::FixAction::CreateFile { path, .. } => format!("file({path})"),
+                        cauldron_sync::protonfixes::FixAction::RenameFile { from, to } => format!("rename({from}->{to})"),
+                        cauldron_sync::protonfixes::FixAction::DeleteFile { path } => format!("delete({path})"),
+                        cauldron_sync::protonfixes::FixAction::CopyFile { from, to } => format!("copy({from}->{to})"),
+                        cauldron_sync::protonfixes::FixAction::SetRegistry { key, name, .. } => format!("reg({key}\\{name})"),
                         cauldron_sync::protonfixes::FixAction::Unknown(_) => "unknown".to_string(),
                     }).collect();
                     println!(
