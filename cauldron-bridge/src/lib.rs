@@ -1735,24 +1735,26 @@ pub extern "C" fn cauldron_list_dependencies(_mgr: *mut c_void) -> *mut c_char {
 pub extern "C" fn cauldron_install_dependency(_mgr: *mut c_void, _bid: *const c_char, _dep: *const c_char) -> *mut c_char {
     to_c_json(&serde_json::json!({"success": false, "error": "Not implemented"}))
 }
+/// Returns 1 if bottle is running, 0 if not, -1 on error.
+/// STUB: always returns 0 (not running) — needs proper process tracking.
 #[no_mangle]
-pub extern "C" fn cauldron_is_bottle_running(_mgr: *mut c_void, _bid: *const c_char) -> *mut c_char {
-    to_c_json(&serde_json::json!({"running": false}))
+pub extern "C" fn cauldron_is_bottle_running(_mgr: *mut c_void, _bid: *const c_char) -> i32 {
+    // STUB: needs per-bottle process tracking
+    0
 }
+/// Kill Wine processes for a bottle. Returns 0 on success, -1 on failure.
 #[no_mangle]
-pub extern "C" fn cauldron_kill_bottle(_mgr: *mut c_void, _bid: *const c_char) -> *mut c_char {
-    // Use wineserver -k for graceful shutdown — properly deregisters dock icons
+pub extern "C" fn cauldron_kill_bottle(_mgr: *mut c_void, _bid: *const c_char) -> i32 {
     let home = std::env::var("HOME").unwrap_or_default();
     let wineserver = format!("{}/Library/Cauldron/wine/bin/wineserver", home);
     let result = std::process::Command::new("sh")
         .args(["-c", &format!(
-            "{ws} -k 2>/dev/null; {ws} -w 2>/dev/null; sleep 1; \
-             if pgrep -f wineserver >/dev/null 2>&1; then {ws} -k9 2>/dev/null; sleep 1; fi; true",
+            "{ws} -k; {ws} -w; sleep 1; \
+             if pgrep -f wineserver >/dev/null 2>&1; then {ws} -k9; sleep 1; fi; true",
             ws = wineserver
         )])
         .output();
-    let killed = result.is_ok();
-    to_c_json(&serde_json::json!({"success": killed, "killed": if killed { 1 } else { 0 }}))
+    if result.is_ok() { 0 } else { -1 }
 }
 
 /// Switch a bottle's graphics backend (stub — backend switching now handled via env vars at launch).
