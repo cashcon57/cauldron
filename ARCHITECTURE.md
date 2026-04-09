@@ -1,7 +1,7 @@
 # Cauldron — Architecture & Project Plan
 
 > Bleeding-edge macOS game compatibility layer — Proton-synced, Rust-powered, Metal-native.
-> DRAFT v0.2 — April 2026
+> v0.2 — April 2026
 
 ---
 
@@ -33,8 +33,8 @@ Cauldron is structured as four layers:
 |---|---|---|
 | **UI Shell** | Swift / SwiftUI | Native macOS interface, bottle management, game library, settings |
 | **Core Engine** | Rust | Wine process management, bottle lifecycle, environment setup, configuration |
-| **Sync Pipeline** | Rust + Python | Proton commit monitoring, classification, patch adaptation, database management |
-| **Compatibility Runtime** | C / C++ | Wine fork, DXVK, MoltenVK/KosmicKrisp, D3DMetal, DXMT — the actual translation layer at runtime |
+| **Sync Pipeline** | Rust | Proton commit monitoring, classification, patch adaptation, auto-apply |
+| **Compatibility Runtime** | C / C++ | Wine fork, DXVK-macOS, MoltenVK/KosmicKrisp, D3DMetal, DXMT — the actual translation layer at runtime |
 
 ### 3.2 Why Rust Core with Swift Shell
 
@@ -390,99 +390,203 @@ CrossOver 26 represents the current benchmark:
 | Component | Technology | Rationale |
 |---|---|---|
 | Core Engine | Rust (with tokio for async) | Systems-level performance, safety, excellent C FFI |
-| UI Shell | Swift 5.9+ / SwiftUI | Native macOS look and feel, App Store compatible |
-| Rust-Swift Bridge | `swift-bridge` or `cbindgen` + C FFI | Generates type-safe Swift bindings from Rust |
-| Game Database | SQLite via `rusqlite` | Embedded, no external dependencies, fast |
-| Sync Pipeline | Rust (`git2` crate) + Python (patch parsing) | `git2` for repo operations, Python for Proton script parsing |
-| Wine Runtime | Custom Wine fork (C) | Based on Proton's Wine, adapted for macOS |
+| UI Shell | Swift 6.2+ / SwiftUI | Native macOS look and feel, macOS 26+ |
+| Rust-Swift Bridge | `cbindgen` + C FFI (`@_silgen_name`) | 40+ exported C functions, JSON serialization across boundary |
+| Game Database | SQLite via `rusqlite` (WAL mode) | Embedded, no external dependencies, fast |
+| Sync Pipeline | Rust (`git2` crate) | Git polling, commit classification, patch auto-adaptation |
+| Wine Runtime | Custom Wine fork (C) | Wine 11.6 with 131 patches from 9 sources |
 | D3D Translation (Path A) | D3DMetal (GPTK) | Apple's native D3D-to-Metal for DX11/12 |
 | D3D Translation (Path B) | DXMT | Metal-native D3D10/11, best DX11 perf on Mac |
-| D3D Translation (Path C) | DXVK + MoltenVK | Proton-compatible D3D9/10/11 via Vulkan-to-Metal |
+| D3D Translation (Path C) | DXVK-macOS + MoltenVK | Gcenx's macOS DXVK fork, D3D9/10/11 via Vulkan-to-Metal |
 | D3D Translation (Path D) | DXVK + KosmicKrisp (future) | Full DXVK 2.x via Vulkan 1.3 on Metal 4 |
 | D3D Translation (Path E) | vkd3d-proton + Vulkan (experimental) | DX12 via Vulkan, per-game viability |
-| Shader Compilation | SPIRV-Cross (SPIR-V → MSL) | Required for Metal shader generation |
+| Graphics Detection | PE import table analysis | DX8-12, Vulkan, OpenGL auto-detection from exe imports |
+| Game Binary Patching | Hex pattern matching + backup/restore | Reversible GPU check/driver version fixes |
+| x87 Acceleration | RosettaX87 (WineAndAqua) | 4-10x faster x87 FP via patched Rosetta |
 | Synchronization | MSync (default), os_sync_wait_on_address (experimental) | Fast Wine sync on macOS |
-| Build System | Cargo + Xcode + Meson | Cargo for Rust, Xcode for Swift shell, Meson for DXVK |
-| CI/CD | GitHub Actions (macOS runners) | Nightly builds, smoke tests, release automation |
+| Configuration | Three-tier profile system (Stable/Preview/Bleeding Edge) | Global presets + per-game overrides |
+| Build System | Cargo + Swift Package Manager + Make | Cargo for Rust, SPM for Swift, Make for Wine |
+| CI/CD | GitHub Actions (macOS runners) | Build checks, unit tests (256+), E2E tests |
 | Package Distribution | DMG + Homebrew Cask + Sparkle | Standard macOS distribution channels |
 
 ---
 
-## 12. Project Plan
+## 12. Project Plan & Status
 
-### Phase 0: Foundation (Weeks 1–4)
+### Phase 0: Foundation — COMPLETE
 
-Establish the project infrastructure and Rust core skeleton.
+- [x] Rust workspace: `cauldron-core`, `cauldron-sync`, `cauldron-db`, `cauldron-bridge`, `cauldron-cli`
+- [x] Rust-to-Swift FFI bridge (40+ exported C functions)
+- [x] CI pipeline (GitHub Actions: cargo test, cargo check, swift build, E2E)
+- [x] Wine 11.6 fork with 131 patches from 9 sources
+- [x] 256+ unit tests, 2 integration test suites
 
-- Fork Whisky repository; strip Swift UI down to minimal shell.
-- Initialize Rust workspace with `cargo-workspace`: `cauldron-core`, `cauldron-sync`, `cauldron-db` crates.
-- Implement Rust-to-Swift FFI bridge (bottle listing, create, delete, launch).
-- Set up CI pipeline (GitHub Actions: build on macOS 13+, run `cargo test`, build Xcode scheme).
-- Fork Wine (from Proton's Wine) and verify macOS build.
+### Phase 1: Core Engine — COMPLETE
 
-**Exit criteria:** Rust core can create a Wine bottle and launch `notepad.exe` via the Swift UI.
+- [x] Bottle management (create, list, delete, import, discover from Whisky/CrossOver)
+- [x] Wine downloading (Gcenx releases, local builds)
+- [x] Wine process launching with full environment setup
+- [x] Five graphics backends with auto-select (D3DMetal, DXMT, DXVK+MoltenVK, DXVK+KosmicKrisp, vkd3d-proton)
+- [x] D3DMetal auto-detection from CrossOver/GPTK with one-click import
+- [x] MSync integration (Mach semaphore sync)
+- [x] Dependency auto-install via winetricks (vcrun, dotnet, d3dx9, etc.)
+- [x] Steam installer (download + silent setup in bottle)
+- [x] Activation system (14-day trial, Ed25519 JWT, Keychain storage)
 
-### Phase 1: Graphics Backend (Weeks 5–10)
+### Phase 2: Intelligent Features — COMPLETE
 
-Build the hybrid graphics system with auto-selection across all three primary paths.
+- [x] Graphics API auto-detection via PE import table (DX8-12, Vulkan, OpenGL)
+- [x] RosettaX87 integration (detection, settings toggle, env var injection)
+- [x] Game binary patching system (reversible GPU check/driver version fixes)
+- [x] Per-game profile seeding (20 pre-configured games with known-good backends)
+- [x] Three optimization profiles: Stable, Preview, Bleeding Edge
+- [x] Per-game settings overrides with profile mismatch warnings
+- [x] Advanced settings tab for power users
+- [x] Game library with Play buttons, API badges, per-game launch
+- [x] Proton auto-sync pipeline (monitor → classify → adapt → apply → database)
+- [x] Patch triage UI (apply, skip, reverse, inspect diffs)
 
-- Integrate DXVK-macOS + MoltenVK; verify D3D9/10/11 rendering.
-- Integrate D3DMetal/GPTK path; verify D3D11/12 rendering.
-- Integrate DXMT for D3D10/11 (the best DX11 path on lower-spec hardware).
-- Build backend auto-select logic in Rust: read game DB, set environment variables, select DLLs.
-- Implement per-bottle graphics settings UI in SwiftUI (backend selection, MetalFX toggle, async shaders).
-- Integrate MSync as default synchronization primitive.
-- Test with 10+ games across all three paths. Document results.
+### Phase 3: Polish — IN PROGRESS
 
-**Exit criteria:** Can launch a D3D11 game via DXMT, a D3D12 game via D3DMetal, a D3D9 game via DXVK, with correct auto-selection.
+- [ ] DXMT Wine patches (winemetal.drv)
+- [ ] umu-protonfixes full integration (354 game scripts)
+- [ ] umu-database cross-store title lookup
+- [ ] Performance overlay / frame timing capture
+- [ ] Community compatibility reporting
+- [ ] Notarized DMG for Gatekeeper
+- [ ] Stripe backend (Cloudflare Worker)
 
-### Phase 2: Sync Pipeline (Weeks 11–18)
+### Phase 4+: Future
 
-Build the automated Proton-to-Cauldron sync system.
-
-- Implement Proton repo monitor using `git2` crate: poll for new commits on configurable interval.
-- Build commit classifier: parse diffs, tag by subsystem, assign transferability score.
-- Build game config importer: parse Proton's `default_compat_config()` and import to SQLite.
-- Implement patch adapter: auto-apply Wine/DXVK patches to Cauldron forks; flag conflicts.
-- Build kernel-mapping layer: implement macOS equivalents for fsync, esync, eventfd patterns.
-- Import Proton-GE high-value patches (de-steamification, FSR injection, LARGE_ADDRESS_AWARE, etc.).
-- Set up nightly CI: auto-sync, build, smoke test, publish nightly if green.
-
-**Exit criteria:** A new Proton commit that fixes a Wine API bug is automatically applied to Cauldron's nightly build within 24 hours.
-
-### Phase 3: Community & Polish (Weeks 19–26)
-
-Build community infrastructure and polish the user experience.
-
-- Implement community compatibility reporting: opt-in telemetry, game ratings, backend recommendations.
-- Build game library UI: scan installed games, show compatibility status, one-click launch.
-- Implement shader cache sharing (like Proton's fossilize): pre-compiled shader cache downloads.
-- Integrate umu-protonfixes (354+ game scripts) for automatic per-game fixes.
-- Add Proton-GE-style community patch integration: curated patch sets beyond official Proton.
-- Performance profiling and optimization: Metal HUD, frame timing, memory usage.
-- Begin KosmicKrisp integration testing (if macOS 26 available).
-- Begin `os_sync_wait_on_address` experimental sync path.
-- Documentation, contributor guide, release automation.
-
-**Exit criteria:** Public beta release. 50+ games tested. Community can submit compatibility reports.
+- [ ] Extension system (custom patches, community registry)
+- [ ] Anti-cheat patches (EAC/BattlEye) if available
+- [ ] KosmicKrisp integration (Vulkan 1.3 on Metal 4)
+- [ ] os_sync_wait_on_address (macOS 14.4+ public futex)
+- [ ] ARM64EC native execution
 
 ---
 
-## 13. Milestone Summary
+## 13. Wine & Graphics Translation Technical Reference
 
-| Milestone | Target | Key Deliverable |
+Hard-won knowledge from integration testing. Read this before modifying Wine launch code, DLL override logic, or graphics backend switching.
+
+### 13.1 Wine DLL Loading Architecture
+
+Wine has three DLL types with strict semantics:
+
+| Type | Where Wine looks | How to trigger | Example |
+|---|---|---|---|
+| **builtin** | `lib/wine/x86_64-windows/` then `drive_c/windows/system32/` | Default, or `=b` override | Wine's own d3d11.dll |
+| **native** | Application directory, then Windows PATH dirs | `=n` override | A game's bundled DLL |
+| **native,builtin** | Try native first, fall back to builtin | `=n,b` override | DXMT/DXVK DLLs in game dir |
+
+Key behaviors:
+- **`WINEDLLPATH`** only affects builtin search. If a DLL in WINEDLLPATH is not a Wine builtin (missing Wine PE signature), it is **silently ignored** with the message `"found in WINEDLLPATH but not a builtin, ignoring"`.
+- **`WINEDLLOVERRIDES`** is read from the **Unix process environment** via `getenv()` in `ntdll/unix/loadorder.c`. It is NOT read from the Wine registry. The `Session Manager\Environment` registry key sets Windows env vars visible to `cmd /c echo %VAR%` but does NOT affect Wine's DLL loader.
+- **AppDefaults registry overrides** (`HKCU\Software\Wine\AppDefaults\<exe>\DllOverrides`) DO take precedence over `WINEDLLOVERRIDES` env var. This is how we protect `steamwebhelper.exe` from DXMT overrides.
+- Wine marks its own PE DLLs with a **"Wine builtin" signature** in the PE header. DLLs with this marker are treated as builtins regardless of where they're found.
+
+### 13.2 DXMT Installation
+
+DXMT (Direct3D 11 to Metal) consists of five files across two directories:
+
+```
+lib/wine/x86_64-windows/     (PE DLLs — Windows side)
+  d3d11.dll                   DXMT's D3D11 implementation (5.2MB, has Wine builtin marker)
+  d3d10core.dll               DXMT's D3D10 implementation
+  dxgi.dll                    DXMT's DXGI implementation
+  winemetal.dll               Windows-side Metal bridge stub (73KB)
+
+lib/wine/x86_64-unix/        (Unix shared objects — native macOS side)
+  winemetal.so                Actual Metal rendering engine (33MB)
+```
+
+DXMT's d3d11.dll imports `winemetal.dll`, which uses Wine's `__wine_unix_call()` to dispatch into `winemetal.so` (the actual Metal GPU code). Without `winemetal.dll` + `winemetal.so`, DXMT's d3d11.dll loads but falls back to `wined3d.dll` (Wine's OpenGL renderer), causing `GL_INVALID_FRAMEBUFFER_OPERATION` errors and crashes.
+
+**Installation approaches (ranked by reliability):**
+
+1. **Replace Wine builtins** — Copy DXMT DLLs into `lib/wine/x86_64-windows/`, replacing Wine's originals (back them up as `.wine-orig`). This makes DXMT the default for ALL processes. Most reliable.
+2. **Game directory + override** — Copy DLLs to the game directory and set `WINEDLLOVERRIDES=d3d11=n,b`. Works when the env var propagates. Fails for Steam-launched games (see 13.3).
+3. **System32 replacement** — Copy to `drive_c/windows/system32/`. Wine treats these as builtins, but its own `lib/wine/` copies take priority, so this doesn't work.
+4. **WINEDLLPATH** — Does NOT work for DXMT. Wine rejects non-builtin DLLs from this path.
+
+### 13.3 Environment Variable Propagation Through Steam
+
+This is the hardest problem in the Wine/DXMT integration.
+
+**The problem:** When you launch `wine steam.exe -applaunch <id>`, Steam creates a child process for the game. Wine's child process creation uses `fork()` + `exec_wineloader()` (in `ntdll/unix/process.c`). The `exec_wineloader` function calls `execv()` on the wineloader binary at `lib/wine/x86_64-unix/wine`.
+
+**What propagates:**
+- Unix env vars set before the initial `wine` call propagate to the wineserver and first process
+- The wineserver inherits env from its creator
+- `fork()` inherits parent env, so children of wine processes get the env
+
+**What does NOT propagate:**
+- Env vars from a second `wine` CLI call (e.g., `wine steam.exe -applaunch 377160`) do NOT affect existing wineserver children
+- Shell script wrappers around the wine binary are NOT called by `exec_wineloader` — Wine resolves the wineloader path from `ntdll.so`'s directory and execs the binary directly
+- `DYLD_INSERT_LIBRARIES` propagates via fork+exec but may be stripped by SIP for certain binaries
+
+**Working solutions:**
+- Set `WINEDLLOVERRIDES` in the Windows system registry (`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`). These are visible to `cmd /c echo %VAR%` but do NOT affect `loadorder.c`'s `getenv()`.
+- Install DXMT as Wine builtin replacement (approach 1 above) — no overrides needed
+- Patch Wine's `loadorder.c` to prefer native DLLs from the application directory for known graphics DLLs (d3d11, dxgi, d3d10core, d3d12, d3d9)
+
+### 13.4 Steam CEF (steamwebhelper.exe) Compatibility
+
+Steam's UI is Chromium Embedded Framework (CEF). It crashes on upstream Wine without fixes:
+
+| Fix | Mechanism | Location |
 |---|---|---|
-| M0: Project bootstrap | Week 2 | Repo forked, Rust workspace compiles, CI green |
-| M1: First bottle launch | Week 4 | `notepad.exe` runs via Rust core + Swift UI |
-| M2: DXVK rendering | Week 7 | D3D9/11 game renders frames via DXVK+MoltenVK |
-| M3: D3DMetal rendering | Week 8 | D3D12 game renders frames via GPTK path |
-| M4: DXMT rendering | Week 9 | D3D11 game renders frames via DXMT |
-| M5: Auto-select works | Week 10 | Game launches with correct backend chosen automatically |
-| M6: Sync pipeline MVP | Week 14 | Proton commits classified and displayed in dashboard |
-| M7: Auto-apply working | Week 18 | Wine API patches auto-applied and built nightly |
-| M8: Public alpha | Week 20 | Installable DMG with 20+ tested games |
-| M9: Community reporting | Week 23 | Users can submit game compatibility reports |
-| M10: Public beta | Week 26 | 50+ games, shader cache, protonfixes, stable nightly pipeline |
+| `--no-sandbox` | Disables CEF sandbox that hooks ntdll syscall thunks | Passed as `-no-cef-sandbox` flag to steam.exe |
+| `--in-process-gpu --disable-gpu` | Disables GPU rendering in CEF | Injected by `hack_append_command_line` patch in `kernelbase/process.c` |
+| `ShowCrashDialog=0` | Suppresses Wine crash dialog for non-fatal CEF subprocess crashes | Registry: `HKCU\Software\Wine\WineDbg` |
+| `steamwebhelper.exe` → `builtin` d3d11 | Prevents DXMT native d3d11 from crashing CEF's rendering | Registry: `AppDefaults\steamwebhelper.exe\DllOverrides` |
+
+### 13.5 Wine Process Lifecycle on macOS
+
+**Zombie prevention:**
+- `WINEBOOT=""` skips `wineboot --init` for existing bottles. Without this, rapid launch/kill cycles create `wineboot.exe` processes stuck in uninterruptible sleep (macOS kernel state `UEs`), which cannot be killed by any signal.
+- `WINEDEBUGGER=""` disables Wine's auto crash debugger (`winedbg --auto`), which otherwise spawns for every crashed subprocess and accumulates as dock icon zombies.
+- `winemenubuilder.exe=d` in `WINEDLLOVERRIDES` disables Wine's dock/menu integration.
+
+**Clean shutdown:**
+- Always use `wineserver -k` followed by `wineserver -w` (wait). This cleanly deregisters all windows from the macOS window server.
+- Never use `pkill -9 -f wine` — this leaves orphaned dock icons and stale wineserver sockets.
+- The Cauldron stop button iterates all bottle prefixes and calls `WINEPREFIX=<path> wineserver -k` for each.
+
+**WINEPREFIX and symlinks:**
+- `WINEPREFIX` MUST point to the resolved (real) path, not a symlink. Wine resolves the wineserver socket path from WINEPREFIX — a symlinked path creates a different socket name, causing Wine to exit immediately.
+- Use `std::fs::canonicalize()` in Rust or `os.path.realpath()` in Python before setting WINEPREFIX.
+
+### 13.6 D3DMetal vs DXMT vs DXVK
+
+| Feature | D3DMetal (Apple) | DXMT (3Shain) | DXVK (via MoltenVK) |
+|---|---|---|---|
+| DX11 | Yes | Yes | Yes |
+| DX12 | Yes | No | Via vkd3d-proton |
+| DX9 | No | No | Yes |
+| Translation path | D3D → Metal (direct) | D3D → Metal (direct) | D3D → Vulkan → Metal |
+| Performance | Best (10-30% over DXVK) | Close to D3DMetal (within 5-15%) | Slowest (double translation) |
+| Wine patches needed | Zero (external DLL/dylib) | Zero (Wine builtin replacement) | Zero (DLL override) |
+| Open source | No (Apple proprietary) | Yes (MIT) | Yes (zlib) |
+| Requires CrossOver | Effectively yes (hooks into winemac.drv) | No | No |
+
+**D3DMetal requires zero Wine source patches.** It operates entirely at the DLL override / dylib loading level. The `.so` bridge files in `x86_64-unix/` replace Wine's builtin wined3d path by `dlopen("D3DMetal.framework/D3DMetal")` at runtime.
+
+---
+
+## 14. Current Codebase Metrics
+
+| Metric | Count |
+|---|---|
+| Rust crates | 5 (core, db, sync, bridge, cli) |
+| Swift modules | 1 (CauldronApp with 30+ views/models) |
+| Rust tests | 256+ (unit + integration) |
+| FFI functions | 40+ (C boundary between Rust and Swift) |
+| SQLite tables | 6 (games, proton_commits, backend_overrides, compatibility_reports, patch_log, sync_status) |
+| Wine patches | 131 from 9 sources |
+| Game profiles | 20 pre-seeded |
+| Binary patch definitions | 4 games (Elden Ring, Cyberpunk 2077, Hogwarts Legacy, Baldur's Gate 3) |
 
 ---
 
@@ -507,19 +611,30 @@ Build community infrastructure and polish the user experience.
 
 ```
 cauldron/
-├── cauldron-core/          # Rust: bottle management, process spawning, environment setup
-├── cauldron-sync/          # Rust: Proton monitor, commit classifier, patch adapter
-├── cauldron-db/            # Rust: SQLite game database, compatibility records, migrations
-├── cauldron-bridge/        # Rust: C FFI exports for Swift, cbindgen headers
-├── CauldronApp/            # Xcode: SwiftUI shell
-├── wine/                   # Submodule: Cauldron's Wine fork (Proton-based)
-├── dxvk/                   # Submodule: DXVK fork
-├── dxmt/                   # Submodule: DXMT (3Shain's Metal D3D11)
-├── moltenvk/               # Submodule: MoltenVK
-├── scripts/                # Python: Proton config parser, patch analysis
-├── db/                     # Seed data: game compat DB, migrations
-├── ci/                     # GitHub Actions: nightly sync, build, test, release
+├── cauldron-core/          # Rust: bottles, wine, graphics, game_scanner, game_patches,
+│                           #       rosettax87, runtime_downloader, shader_cache, registry
+├── cauldron-sync/          # Rust: monitor, classifier, adapter, applicator, pipeline,
+│                           #       auto_adapter, config_importer, protonfixes, patch_analysis
+├── cauldron-db/            # Rust: SQLite schema, queries, models (6 tables)
+├── cauldron-bridge/        # Rust: C FFI layer (40+ functions), JSON serialization
+├── cauldron-cli/           # Rust: CLI interface for testing/debugging
+├── CauldronApp/            # Swift/SwiftUI macOS app
+│   ├── Bridge/             #   CauldronFFI.swift, CauldronBridge.swift
+│   ├── Models/             #   Bottle, GameRecord, GraphicsBackend, ConfigProfile,
+│   │                       #   PerGameSettings, AppSettings, WineVersion, SyncStatus
+│   ├── Views/              #   ContentView, BottleDetailView, GameLibraryView,
+│   │                       #   SettingsView (Profile/General/Advanced/Sync/Performance/About),
+│   │                       #   SyncStatusView, PatchInspectSheet, SteamInstallWizard,
+│   │                       #   DiscoveredBottlesView, CreateBottleView, DependencyPickerSheet
+│   ├── ViewModels/         #   BottleListViewModel
+│   └── Licensing/          #   LicenseManager, JWTValidator, KeychainHelper, ActivationView
+├── patches/cauldron/       # Wine patch series (131 patches)
+├── scripts/                # Build scripts (init_wine_fork.sh, build_wine.sh, etc.)
+├── deps/                   # Submodules (wine-msync, cxpatcher, umu-protonfixes)
+├── dxvk/, dxmt/, moltenvk/ # Graphics runtime submodules
+├── db/                     # SQLite schema, migrations, seed data
 ├── Cargo.toml              # Workspace root
+├── Makefile                # Build targets (build, test, swift-build, wine-init, etc.)
 └── README.md
 ```
 
@@ -545,6 +660,7 @@ cauldron/
 | `D3DM_SUPPORT_DXR=1` | Enable DXR in D3DMetal (M3+) |
 | `DXMT_METALFX_SPATIAL_SWAPCHAIN=1` | MetalFX upscaling in DXMT |
 | `ROSETTA_ADVERTISE_AVX=1` | Enable AVX/AVX2 in Rosetta (Sequoia+) |
+| `ROSETTA_X87_PATH=/path` | RosettaX87 patched FP handler (4-10x x87 perf) |
 
 ### Game Fixes
 
@@ -561,15 +677,21 @@ cauldron/
 
 ## 17. Open Questions
 
-- **Naming:** "Cauldron" is a working codename. Final name TBD.
-- **Steam dependency:** Should Cauldron require Steam, or support standalone EXE launching too? (Recommendation: support both, but prioritize Steam for the game database.)
-- **Homebrew distribution:** Homebrew Cask is the standard for macOS apps, but auto-update via Sparkle is smoother. Ship both?
 - **Shader cache infrastructure:** Hosting pre-compiled shader caches requires a server. Self-hosted, or CDN? (Recommendation: Cloudflare R2 for cost efficiency.)
 - **Telemetry:** Opt-in game compatibility reporting is essential, but privacy-sensitive. Define exactly what data is collected and publish the schema.
-- **Apple Silicon only, or Universal Binary?** Recommendation: ARM64 only for v1. x86_64 macOS is a shrinking target.
-- **KosmicKrisp timeline:** When does it become stable enough to ship as a MoltenVK replacement? Monitor Mesa releases.
+- **KosmicKrisp timeline:** When does it become stable enough to ship as a MoltenVK replacement? Monitor Mesa releases. MoltenVK feature parity reached in Mesa 26.0, but `VK_EXT_graphics_pipeline_library` status for DXVK 2.x unknown.
 - **os_sync_wait_on_address:** Is the API complete enough to build a full sync primitive on? Needs experimentation.
 - **Protonfixes runtime:** Ship Python runtime for protonfixes scripts, or rewrite critical ones in Rust? (Recommendation: embed Python initially, migrate high-value scripts over time.)
+- **Extension system scope:** How much flexibility vs. security? Current design is declarative TOML-only (no script execution).
+
+### Resolved Questions
+
+- **Naming:** "Cauldron" confirmed as final name.
+- **Steam dependency:** Supports both Steam and standalone EXE launching. Game library scans Steam ACF manifests and arbitrary executables.
+- **Apple Silicon only:** ARM64 only for v1. macOS 26+ required.
+- **Homebrew distribution:** Ship DMG + Homebrew Cask + Sparkle (auto-update for official builds only).
+- **Graphics API detection:** Implemented via PE import table analysis — detects DX8-12, Vulkan, OpenGL automatically.
+- **Profile system:** Three-tier (Stable/Preview/Bleeding Edge) with per-game overrides. Resolved the "how do users configure this" question.
 
 ---
 

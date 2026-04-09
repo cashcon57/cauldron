@@ -67,7 +67,19 @@ func cauldron_launch_exe(
     _ mgr: UnsafeMutableRawPointer?,
     _ bottle_id: UnsafePointer<CChar>?,
     _ exe_path: UnsafePointer<CChar>?,
-    _ backend: UnsafePointer<CChar>?
+    _ settings_json: UnsafePointer<CChar>?
+) -> Int32
+
+@_silgen_name("cauldron_kill_bottle")
+func cauldron_kill_bottle(
+    _ mgr: UnsafeMutableRawPointer?,
+    _ bottle_id: UnsafePointer<CChar>?
+) -> Int32
+
+@_silgen_name("cauldron_is_bottle_running")
+func cauldron_is_bottle_running(
+    _ mgr: UnsafeMutableRawPointer?,
+    _ bottle_id: UnsafePointer<CChar>?
 ) -> Int32
 
 @_silgen_name("cauldron_download_wine")
@@ -109,6 +121,68 @@ func cauldron_analyze_patches(_ mgr: UnsafeMutableRawPointer?) -> UnsafeMutableP
 
 @_silgen_name("cauldron_verify_build")
 func cauldron_verify_build(_ mgr: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_list_dependencies")
+func cauldron_list_dependencies(_ mgr: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_install_dependency")
+func cauldron_install_dependency(
+    _ mgr: UnsafeMutableRawPointer?,
+    _ bottleId: UnsafePointer<CChar>?,
+    _ dependencyId: UnsafePointer<CChar>?
+) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_detect_d3dmetal")
+func cauldron_detect_d3dmetal(_ mgr: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_import_d3dmetal")
+func cauldron_import_d3dmetal(
+    _ mgr: UnsafeMutableRawPointer?,
+    _ customPath: UnsafePointer<CChar>?
+) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_detect_rosettax87")
+func cauldron_detect_rosettax87(_ mgr: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_scan_game_patches")
+func cauldron_scan_game_patches(
+    _ mgr: UnsafeMutableRawPointer?,
+    _ bottleId: UnsafePointer<CChar>?
+) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_apply_game_patch")
+func cauldron_apply_game_patch(
+    _ mgr: UnsafeMutableRawPointer?,
+    _ exePath: UnsafePointer<CChar>?
+) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_restore_game_exe")
+func cauldron_restore_game_exe(
+    _ mgr: UnsafeMutableRawPointer?,
+    _ exePath: UnsafePointer<CChar>?
+) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_list_known_game_patches")
+func cauldron_list_known_game_patches(_ mgr: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_seed_game_profiles")
+func cauldron_seed_game_profiles(_ mgr: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_get_game_recommendation")
+func cauldron_get_game_recommendation(
+    _ mgr: UnsafeMutableRawPointer?,
+    _ appId: UInt32
+) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_download_all_runtimes")
+func cauldron_download_all_runtimes(_ mgr: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("cauldron_switch_backend")
+func cauldron_switch_backend(
+    _ mgr: UnsafeMutableRawPointer?,
+    _ bottleId: UnsafePointer<CChar>?,
+    _ backend: UnsafePointer<CChar>?
+) -> UnsafeMutablePointer<CChar>?
 
 @_silgen_name("cauldron_free_string")
 func cauldron_free_string(_ s: UnsafeMutablePointer<CChar>?)

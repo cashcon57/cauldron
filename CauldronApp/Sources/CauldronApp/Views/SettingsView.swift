@@ -3,14 +3,19 @@ import SwiftUI
 struct SettingsView: View {
     var body: some View {
         TabView {
+            ProfileSettingsTab()
+                .tabItem {
+                    Label("Profile", systemImage: "flame")
+                }
+
             GeneralSettingsTab()
                 .tabItem {
                     Label("General", systemImage: "gearshape")
                 }
 
-            GraphicsSettingsTab()
+            AdvancedSettingsTab()
                 .tabItem {
-                    Label("Graphics", systemImage: "rectangle.stack.badge.play")
+                    Label("Advanced", systemImage: "slider.horizontal.3")
                 }
 
             SyncSettingsTab()
@@ -28,13 +33,179 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 560, height: 480)
+        .frame(width: 600, height: 540)
+    }
+}
+
+// MARK: - Profile Tab (Hero)
+
+private struct ProfileSettingsTab: View {
+    @State private var settings = AppSettings.shared
+    @State private var showApplyConfirmation = false
+    @State private var pendingProfile: ConfigProfile? = nil
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                // Hero profile selector
+                VStack(spacing: 12) {
+                    Text("Optimization Profile")
+                        .font(.title3.weight(.bold))
+
+                    Text("Choose how aggressively Cauldron optimizes. This sets all graphics, sync, and performance options at once. You can fine-tune individual settings in the Advanced tab.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 460)
+                }
+
+                HStack(spacing: 12) {
+                    ForEach(ConfigProfile.allCases, id: \.self) { profile in
+                        ProfileCard(
+                            profile: profile,
+                            isActive: settings.activeProfile == profile,
+                            onSelect: {
+                                if profile == settings.activeProfile { return }
+                                pendingProfile = profile
+                                showApplyConfirmation = true
+                            }
+                        )
+                    }
+                }
+
+                // Drift warning
+                if !settings.globalMatchesProfile {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Settings have been customized")
+                                .font(.subheadline.weight(.medium))
+                            Text("Some advanced settings differ from the \(settings.activeProfile.displayName) profile defaults. Switch profile to reset, or keep your custom configuration.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Reset to \(settings.activeProfile.displayName)") {
+                            withAnimation { settings.applyProfile(settings.activeProfile) }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .glassEffect(.regular.tint(.orange).interactive(), in: .capsule)
+                    }
+                    .padding(12)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 10))
+                }
+
+                // Current profile summary
+                settingsCard("Active: \(settings.activeProfile.displayName)") {
+                    let preset = settings.activeProfile.preset
+                    ProfileSummaryRow("Graphics Backend", value: preset.graphicsBackend.displayName)
+                    ProfileSummaryRow("RosettaX87", value: preset.rosettaX87Enabled ? "Enabled" : "Disabled")
+                    ProfileSummaryRow("Async Shaders", value: preset.asyncShaderCompilation ? "Enabled" : "Disabled")
+                    ProfileSummaryRow("MetalFX Upscaling", value: preset.metalFXSpatialUpscaling ? "Enabled" : "Disabled")
+                    ProfileSummaryRow("DXR Ray Tracing", value: preset.dxrRayTracing ? "Enabled" : "Disabled")
+                    ProfileSummaryRow("Auto-Apply Game Patches", value: preset.autoApplyGamePatches ? "Enabled" : "Disabled")
+                    ProfileSummaryRow("Nightly Patches", value: preset.showNightlyPatches ? "Shown" : "Hidden")
+                    ProfileSummaryRow("Sync Interval", value: preset.syncInterval.displayName)
+                    ProfileSummaryRow("Performance Monitoring", value: preset.enablePerformanceMonitoring ? "Enabled" : "Disabled")
+                }
+            }
+            .padding(20)
+        }
+        .alert("Switch Profile", isPresented: $showApplyConfirmation) {
+            Button("Cancel", role: .cancel) { pendingProfile = nil }
+            Button("Apply \(pendingProfile?.displayName ?? "")") {
+                if let profile = pendingProfile {
+                    withAnimation { settings.applyProfile(profile) }
+                }
+                pendingProfile = nil
+            }
+        } message: {
+            Text("This will reset all settings to the \(pendingProfile?.displayName ?? "") defaults. Per-game overrides will not be affected.")
+        }
+    }
+}
+
+private struct ProfileCard: View {
+    let profile: ConfigProfile
+    let isActive: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(spacing: 10) {
+                Image(systemName: profile.icon)
+                    .font(.system(size: 28))
+                    .foregroundStyle(isActive ? profile.tintColor : .secondary)
+
+                Text(profile.displayName)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(profile.tagline)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .frame(height: 36)
+
+                if isActive {
+                    Text("Active")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(profile.tintColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(profile.tintColor.opacity(0.15))
+                        .clipShape(Capsule())
+                } else {
+                    Text("Select")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .padding(.horizontal, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(
+            isActive ? .regular.tint(profile.tintColor) : .regular,
+            in: .rect(cornerRadius: 14)
+        )
+    }
+}
+
+private struct ProfileSummaryRow: View {
+    let label: String
+    let value: String
+
+    init(_ label: String, value: String) {
+        self.label = label
+        self.value = value
+    }
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .font(.subheadline)
+            Spacer()
+            Text(value)
+                .font(.subheadline)
+        }
     }
 }
 
 // MARK: - General Tab
 
 private struct GeneralSettingsTab: View {
+    @Environment(LicenseManager.self) private var licenseManager: LicenseManager?
     @State private var settings = AppSettings.shared
 
     var body: some View {
@@ -72,10 +243,57 @@ private struct GeneralSettingsTab: View {
 
                 settingsCard("Behavior") {
                     Toggle("Auto-launch Steam in bottles", isOn: $settings.autoLaunchSteam)
-                    Toggle("Check for updates automatically", isOn: $settings.checkForUpdates)
+                    if BuildChannel.isOfficialBuild {
+                        Toggle("Check for updates automatically", isOn: $settings.checkForUpdates)
+                    } else {
+                        HStack {
+                            Toggle("Check for updates automatically", isOn: .constant(false))
+                                .disabled(true)
+                            Spacer()
+                        }
+                        Text("Auto-updates are only available on official builds.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                settingsCard("About") {
+                    HStack {
+                        Text("Build")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(BuildChannel.displayName)
+                            .foregroundStyle(BuildChannel.isOfficialBuild ? .primary : .secondary)
+                    }
+                    if let licenseManager {
+                        HStack {
+                            Text("License")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(licenseManager.status.displayName)
+                                .foregroundStyle(licenseStatusColor)
+                        }
+                        if licenseManager.status == .activated {
+                            Button("Deactivate this machine") {
+                                licenseManager.deactivate()
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                        }
+                    }
                 }
             }
             .padding(20)
+        }
+    }
+
+    private var licenseStatusColor: Color {
+        guard let licenseManager else { return .secondary }
+        switch licenseManager.status {
+        case .community: return .secondary
+        case .trial: return .orange
+        case .activated: return .green
+        case .expired: return .red
         }
     }
 
@@ -92,15 +310,30 @@ private struct GeneralSettingsTab: View {
     }
 }
 
-// MARK: - Graphics Tab
+// MARK: - Advanced Tab (Power Users)
 
-private struct GraphicsSettingsTab: View {
+private struct AdvancedSettingsTab: View {
     @State private var settings = AppSettings.shared
+    @State private var rosettaX87Status: CauldronBridge.RosettaX87Status? = nil
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                settingsCard("Translation Backend") {
+                // Drift indicator
+                if !settings.globalMatchesProfile {
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.blue)
+                        Text("Custom settings active — some values differ from the \(settings.activeProfile.displayName) profile.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .glassEffect(.regular.tint(.blue), in: .rect(cornerRadius: 8))
+                }
+
+                settingsCard("Graphics Backend") {
                     Picker("Default backend", selection: $settings.defaultGraphicsBackend) {
                         ForEach(GraphicsBackend.allCases, id: \.self) { backend in
                             Text(backend.displayName).tag(backend)
@@ -108,7 +341,7 @@ private struct GraphicsSettingsTab: View {
                     }
                 }
 
-                settingsCard("Metal") {
+                settingsCard("Metal Features") {
                     Toggle("Metal Performance HUD", isOn: $settings.metalPerformanceHUD)
                     Toggle("MetalFX Spatial Upscaling", isOn: $settings.metalFXSpatialUpscaling)
 
@@ -126,15 +359,52 @@ private struct GraphicsSettingsTab: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("MoltenVK argument buffers", isOn: $settings.moltenVKArgumentBuffers)
                         Label(
-                            "Enabling argument buffers can cause performance regressions in some titles.",
+                            "Can cause up to 50% FPS regression in some titles. Leave off unless a specific game needs it.",
                             systemImage: "exclamationmark.triangle.fill"
                         )
                         .font(.caption2)
                         .foregroundStyle(.orange)
                     }
                 }
+
+                settingsCard("RosettaX87") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle(isOn: $settings.rosettaX87Enabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Enable RosettaX87 acceleration")
+                                    .font(.body)
+                                Text("4-10x faster x87 floating-point. Benefits mod loaders (SKSE, F4SE) and older DX9 games.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .disabled(!(rosettaX87Status?.available ?? false))
+
+                        if let status = rosettaX87Status {
+                            HStack(spacing: 6) {
+                                Image(systemName: status.available ? "checkmark.circle.fill" : "xmark.circle")
+                                    .foregroundStyle(status.available ? .green : .orange)
+                                Text(status.label)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                settingsCard("Game Compatibility") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Auto-apply game binary patches", isOn: $settings.autoApplyGamePatches)
+                        Text("Automatically apply known GPU check and driver version fixes when launching games. Original executables are backed up.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .padding(20)
+        }
+        .onAppear {
+            rosettaX87Status = CauldronBridge.shared.detectRosettaX87()
         }
     }
 }

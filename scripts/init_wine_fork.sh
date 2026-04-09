@@ -10,7 +10,7 @@ set -euo pipefail
 
 WINE_DIR="wine"
 UPSTREAM_URL="https://github.com/wine-mirror/wine.git"
-UPSTREAM_BRANCH="wine-10.0"  # Latest stable
+UPSTREAM_BRANCH="wine-11.6"  # Latest development — bleeding-edge
 CAULDRON_BRANCH="cauldron/main"
 PATCHES_DIR="patches/cauldron"
 MSYNC_DIR="deps/wine-msync"
@@ -79,7 +79,15 @@ fi
 # --- Step 4: Apply Cauldron patches ---
 if [[ -d "$PATCHES_DIR" ]]; then
     echo "==> Applying Cauldron patches..."
-    CAULDRON_PATCHES=$(find "$PATCHES_DIR" -name "*.patch" | sort)
+    # Apply msync first — it's the largest patch (51 files) and most context-sensitive.
+    # Other patches applied after msync may shift line numbers, but msync applied
+    # first on clean upstream always succeeds.
+    CAULDRON_PATCHES=$(
+        # msync first
+        find "$PATCHES_DIR" -name "*msync*" | sort
+        # then everything else
+        find "$PATCHES_DIR" -name "*.patch" ! -name "*msync*" | sort
+    )
     PATCH_COUNT=0
     for patch in $CAULDRON_PATCHES; do
         PATCH_NAME=$(basename "$patch" .patch)
@@ -93,6 +101,14 @@ if [[ -d "$PATCHES_DIR" ]]; then
             SUBJECT=$(grep -m1 "^Subject:" "$ROOT/$patch" | sed 's/^Subject: \[PATCH\] //' | sed 's/^Subject: //')
             git commit -m "cauldron: $SUBJECT" --author="Cauldron <cauldron@cauldron.app>"
             PATCH_COUNT=$((PATCH_COUNT + 1))
+            # Regenerate protocol headers after msync (adds server protocol entries)
+            if [[ "$PATCH_NAME" == *msync* ]] && [[ -f "$ROOT/$WINE_DIR/tools/make_requests" ]]; then
+                echo "    Regenerating server protocol headers..."
+                cd "$ROOT/$WINE_DIR"
+                perl tools/make_requests 2>/dev/null
+                git add -A && git commit -m "regen: server protocol headers for msync" --author="Cauldron <cauldron@cauldron.app>" 2>/dev/null
+                cd "$ROOT"
+            fi
         else
             echo "    ERROR: Patch does not apply cleanly!"
             echo "    Trying with reduced context (-C1)..."

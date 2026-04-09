@@ -1,0 +1,137 @@
+From 2e6a6565c601246118d18eb9ee129235c7e78986 Mon Sep 17 00:00:00 2001
+From: Marc-Aurel Zent <mzent@codeweavers.com>
+Date: Thu, 26 Mar 2026 16:24:55 +0100
+Subject: [PATCH 1/2] winemac: Replace OSAtomic functions with builtin __atomic
+ counterparts.
+
+Also relaxes memory order when appropiate.
+---
+ dlls/winemac.drv/cocoa_event.m | 11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/dlls/winemac.drv/cocoa_event.m b/dlls/winemac.drv/cocoa_event.m
+index 7c86fc1d5ff..d01df4da3d8 100644
+--- a/dlls/winemac.drv/cocoa_event.m
++++ b/dlls/winemac.drv/cocoa_event.m
+@@ -21,7 +21,6 @@
+ #include <sys/types.h>
+ #include <sys/event.h>
+ #include <sys/time.h>
+-#include <libkern/OSAtomic.h>
+ 
+ #include "macdrv_cocoa.h"
+ #import "cocoa_event.h"
+@@ -277,7 +276,7 @@ - (MacDrvEvent*) getEventMatchingMask:(macdrv_event_mask)mask
+                 [events removeObjectAtIndex:index];
+ 
+                 if (event->event->deliver == INT_MAX ||
+-                    OSAtomicDecrement32Barrier(&event->event->deliver) >= 0)
++                    __atomic_sub_fetch(&event->event->deliver, 1, __ATOMIC_SEQ_CST) >= 0)
+                 {
+                     ret = event;
+                     break;
+@@ -647,7 +646,7 @@ int macdrv_copy_event_from_queue(macdrv_event_queue queue,
+  */
+ macdrv_event* macdrv_retain_event(macdrv_event *event)
+ {
+-    OSAtomicIncrement32Barrier(&event->refs);
++    __atomic_add_fetch(&event->refs, 1, __ATOMIC_SEQ_CST);
+     return event;
+ }
+ 
+@@ -662,7 +661,7 @@ void macdrv_release_event(macdrv_event *event)
+ {
+ @autoreleasepool
+ {
+-    if (OSAtomicDecrement32Barrier(&event->refs) <= 0)
++    if (__atomic_sub_fetch(&event->refs, 1, __ATOMIC_SEQ_CST) <= 0)
+     {
+         switch (event->type)
+         {
+@@ -706,7 +705,7 @@ void macdrv_release_event(macdrv_event *event)
+  */
+ macdrv_query* macdrv_retain_query(macdrv_query *query)
+ {
+-    OSAtomicIncrement32Barrier(&query->refs);
++    __atomic_add_fetch(&query->refs, 1, __ATOMIC_SEQ_CST);
+     return query;
+ }
+ 
+@@ -715,7 +714,7 @@ void macdrv_release_event(macdrv_event *event)
+  */
+ void macdrv_release_query(macdrv_query *query)
+ {
+-    if (OSAtomicDecrement32Barrier(&query->refs) <= 0)
++    if (__atomic_sub_fetch(&query->refs, 1, __ATOMIC_SEQ_CST) <= 0)
+     {
+         switch (query->type)
+         {
+-- 
+GitLab
+
+
+From 3969a04a2ae9ebacca5f7ca6367c3448a2de4d02 Mon Sep 17 00:00:00 2001
+From: Marc-Aurel Zent <mzent@codeweavers.com>
+Date: Sat, 28 Mar 2026 11:15:16 +0100
+Subject: [PATCH 2/2] winemac: Relax builtin __atomic memory barriers.
+
+---
+ dlls/winemac.drv/cocoa_event.m | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/winemac.drv/cocoa_event.m b/dlls/winemac.drv/cocoa_event.m
+index d01df4da3d8..d3fc4e8f22c 100644
+--- a/dlls/winemac.drv/cocoa_event.m
++++ b/dlls/winemac.drv/cocoa_event.m
+@@ -276,7 +276,7 @@ - (MacDrvEvent*) getEventMatchingMask:(macdrv_event_mask)mask
+                 [events removeObjectAtIndex:index];
+ 
+                 if (event->event->deliver == INT_MAX ||
+-                    __atomic_sub_fetch(&event->event->deliver, 1, __ATOMIC_SEQ_CST) >= 0)
++                    __atomic_sub_fetch(&event->event->deliver, 1, __ATOMIC_RELAXED) >= 0)
+                 {
+                     ret = event;
+                     break;
+@@ -646,7 +646,7 @@ int macdrv_copy_event_from_queue(macdrv_event_queue queue,
+  */
+ macdrv_event* macdrv_retain_event(macdrv_event *event)
+ {
+-    __atomic_add_fetch(&event->refs, 1, __ATOMIC_SEQ_CST);
++    __atomic_add_fetch(&event->refs, 1, __ATOMIC_RELAXED);
+     return event;
+ }
+ 
+@@ -661,8 +661,9 @@ void macdrv_release_event(macdrv_event *event)
+ {
+ @autoreleasepool
+ {
+-    if (__atomic_sub_fetch(&event->refs, 1, __ATOMIC_SEQ_CST) <= 0)
++    if (__atomic_sub_fetch(&event->refs, 1, __ATOMIC_RELEASE) <= 0)
+     {
++        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+         switch (event->type)
+         {
+             case IM_SET_TEXT:
+@@ -705,7 +706,7 @@ void macdrv_release_event(macdrv_event *event)
+  */
+ macdrv_query* macdrv_retain_query(macdrv_query *query)
+ {
+-    __atomic_add_fetch(&query->refs, 1, __ATOMIC_SEQ_CST);
++    __atomic_add_fetch(&query->refs, 1, __ATOMIC_RELAXED);
+     return query;
+ }
+ 
+@@ -714,8 +715,9 @@ void macdrv_release_event(macdrv_event *event)
+  */
+ void macdrv_release_query(macdrv_query *query)
+ {
+-    if (__atomic_sub_fetch(&query->refs, 1, __ATOMIC_SEQ_CST) <= 0)
++    if (__atomic_sub_fetch(&query->refs, 1, __ATOMIC_RELEASE) <= 0)
+     {
++        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+         switch (query->type)
+         {
+             case QUERY_DRAG_DROP_ENTER:
+-- 
+GitLab
+

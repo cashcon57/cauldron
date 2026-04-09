@@ -95,7 +95,10 @@ struct CreateBottleView: View {
         .onAppear {
             wineVersions = CauldronBridge.shared.getWineVersions()
             // Default to the latest stable, or first available
-            if let firstStable = wineVersions.first(where: { $0.category == "stable" }) {
+            // Default to Cauldron Wine, then stable, then first available
+            if let cauldron = wineVersions.first(where: { $0.category == "cauldron" }) {
+                selectedWineVersion = cauldron.version
+            } else if let firstStable = wineVersions.first(where: { $0.category == "stable" }) {
                 selectedWineVersion = firstStable.version
             } else if let first = wineVersions.first {
                 selectedWineVersion = first.version
@@ -112,7 +115,7 @@ struct CreateBottleView: View {
 
     private var groupedVersions: [VersionGroup] {
         let categories = ["stable", "staging", "development", "gptk"]
-        let labels = ["Stable": "stable", "Staging": "staging", "Development": "development", "GPTK": "gptk"]
+        let labels = ["Cauldron (Recommended)": "cauldron", "Stable": "stable", "Staging": "staging", "Development": "development", "GPTK": "gptk"]
         return labels.sorted(by: { categoryOrder($0.value) < categoryOrder($1.value) }).compactMap { label, cat in
             let versions = wineVersions.filter { $0.category == cat }
             return versions.isEmpty ? nil : VersionGroup(label: label, versions: versions)
@@ -121,10 +124,11 @@ struct CreateBottleView: View {
 
     private func categoryOrder(_ cat: String) -> Int {
         switch cat {
-        case "stable": return 0
-        case "staging": return 1
-        case "development": return 2
-        case "gptk": return 3
+        case "cauldron": return 0
+        case "stable": return 1
+        case "staging": return 2
+        case "development": return 3
+        case "gptk": return 4
         default: return 4
         }
     }
@@ -132,6 +136,12 @@ struct CreateBottleView: View {
 
 extension WineVersionInfo {
     var displayLabel: String {
-        "Wine \(version)"
+        if category == "cauldron" {
+            if version.contains("local") {
+                return "Cauldron Wine 11.6 (local build)"
+            }
+            return "Cauldron Wine 11.6 — 131 patches"
+        }
+        return "Wine \(version)"
     }
 }

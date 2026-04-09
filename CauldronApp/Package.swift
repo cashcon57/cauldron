@@ -11,6 +11,9 @@ let package = Package(
         .executableTarget(
             name: "CauldronApp",
             path: "Sources/CauldronApp",
+            resources: [
+                .process("Resources")
+            ],
             linkerSettings: [
                 .unsafeFlags(["-L", "../target/release"]),
                 .linkedLibrary("cauldron_bridge")
