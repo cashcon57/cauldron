@@ -131,11 +131,22 @@ pub fn auto_adapt(diff: &str) -> AdaptationReport {
     let mut transforms_applied = Vec::new();
     let mut warnings = Vec::new();
 
-    // Apply Tier 1 transforms (direct replacements)
+    // Apply Tier 1 transforms (direct replacements) — ONLY on added content lines.
+    // Skip diff metadata lines (---, +++, @@, diff --git, index) to preserve diff structure.
     for rule in TIER1_TRANSFORMS.iter() {
-        let count = adapted.matches(rule.linux_pattern).count();
+        let mut count = 0;
+        let adapted_lines: Vec<String> = adapted.lines().map(|line| {
+            // Only replace on added content lines (starting with +, but not +++)
+            if line.starts_with('+') && !line.starts_with("+++") {
+                let replaced = line.replace(rule.linux_pattern, rule.macos_replacement);
+                if replaced != line { count += 1; }
+                replaced
+            } else {
+                line.to_string()
+            }
+        }).collect();
         if count > 0 {
-            adapted = adapted.replace(rule.linux_pattern, rule.macos_replacement);
+            adapted = adapted_lines.join("\n");
             transforms_applied.push(TransformApplied {
                 linux_api: rule.linux_pattern.to_string(),
                 macos_api: rule.macos_replacement.to_string(),
