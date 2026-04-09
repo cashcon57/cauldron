@@ -88,16 +88,100 @@ final class CauldronBridge: Sendable {
 
     // MARK: - Launch
 
-    nonisolated func launchExe(bottleId: String, exePath: String, backend: String) -> Bool {
+    /// Launch a game with the full effective settings applied.
+    /// `settings` contains the merged global profile + per-game overrides.
+    nonisolated func launchExe(bottleId: String, exePath: String, settings: LaunchSettings) -> Bool {
         guard let ptr = managerPtr else { return false }
+        guard let jsonData = try? JSONEncoder().encode(settings),
+              let jsonString = String(data: jsonData, encoding: .utf8) else { return false }
+
         let result = bottleId.withCString { bidCStr in
             exePath.withCString { exeCStr in
-                backend.withCString { backendCStr in
-                    cauldron_launch_exe(ptr, bidCStr, exeCStr, backendCStr)
+                jsonString.withCString { settingsCStr in
+                    cauldron_launch_exe(ptr, bidCStr, exeCStr, settingsCStr)
                 }
             }
         }
         return result == 0
+    }
+
+    /// Convenience launcher that builds settings from AppSettings + optional per-game overrides.
+    nonisolated func launchExe(bottleId: String, exePath: String, backend: String) -> Bool {
+        // Build default settings from the backend string (backward compat)
+        let settings = LaunchSettings(
+            backend: backend,
+            msync: true,
+            esync: true,
+            rosettaX87: false,
+            asyncShaders: true,
+            metalfxSpatial: false,
+            metalHud: false,
+            dxrEnabled: false,
+            mvkArgumentBuffers: false,
+            fsr: false,
+            largeAddressAware: false,
+            logLevel: "normal",
+            highResolution: false,
+            frameRateLimit: 0,
+            heapZeroMemory: false
+        )
+        return launchExe(bottleId: bottleId, exePath: exePath, settings: settings)
+    }
+
+    /// Kill all Wine processes in a bottle (for restart / backend change).
+    nonisolated func killBottle(bottleId: String) -> Int {
+        guard let ptr = managerPtr else { return -1 }
+        let result = bottleId.withCString { cauldron_kill_bottle(ptr, $0) }
+        return Int(result)
+    }
+
+    /// Check if a bottle has any running Wine processes.
+    nonisolated func isBottleRunning(bottleId: String) -> Bool {
+        guard let ptr = managerPtr else { return false }
+        let result = bottleId.withCString { cauldron_is_bottle_running(ptr, $0) }
+        return result == 1
+    }
+
+    /// Settings struct passed as JSON to the Rust launch function.
+    struct LaunchSettings: Codable {
+        let backend: String
+        let msync: Bool
+        let esync: Bool
+        let rosettaX87: Bool
+        let asyncShaders: Bool
+        let metalfxSpatial: Bool
+        let metalHud: Bool
+        let dxrEnabled: Bool
+        let mvkArgumentBuffers: Bool
+        let fsr: Bool
+        let largeAddressAware: Bool
+        let logLevel: String
+        let highResolution: Bool
+        let frameRateLimit: Int
+        let heapZeroMemory: Bool
+
+        /// Build from AppSettings global profile + optional per-game overrides.
+        @MainActor
+        static func from(appSettings: AppSettings, perGame: PerGameSettings?, backend: GraphicsBackend? = nil) -> LaunchSettings {
+            let s = appSettings
+            return LaunchSettings(
+                backend: (perGame?.graphicsBackend ?? backend ?? s.defaultGraphicsBackend).rawValue,
+                msync: perGame?.msyncEnabled ?? true,
+                esync: perGame?.esyncEnabled ?? true,
+                rosettaX87: perGame?.rosettaX87Enabled ?? s.rosettaX87Enabled,
+                asyncShaders: perGame?.asyncShaderCompilation ?? s.asyncShaderCompilation,
+                metalfxSpatial: perGame?.metalFXSpatialUpscaling ?? s.metalFXSpatialUpscaling,
+                metalHud: perGame?.metalPerformanceHUD ?? s.metalPerformanceHUD,
+                dxrEnabled: perGame?.dxrRayTracing ?? s.dxrRayTracing,
+                mvkArgumentBuffers: perGame?.moltenVKArgumentBuffers ?? s.moltenVKArgumentBuffers,
+                fsr: perGame?.fsrEnabled ?? s.fsrEnabled,
+                largeAddressAware: perGame?.largeAddressAware ?? false,
+                logLevel: s.logLevel.rawValue,
+                highResolution: perGame?.highResolutionMode ?? s.highResolutionMode,
+                frameRateLimit: perGame?.frameRateLimit ?? s.frameRateLimit,
+                heapZeroMemory: perGame?.heapZeroMemory ?? s.heapZeroMemory
+            )
+        }
     }
 
     // MARK: - Wine Versions
@@ -166,6 +250,76 @@ final class CauldronBridge: Sendable {
         guard let ptr = managerPtr else { return nil }
         let jsonPtr = hash.withCString { hashCStr in
             cauldron_reverse_patch(ptr, hashCStr)
+        }
+        guard let resultString = consumeCString(jsonPtr) else { return nil }
+        return decodeJSON(resultString)
+    }
+
+    // MARK: - Dependencies
+
+    struct DependencyInfo: Codable, Identifiable {
+        let id: String
+        let name: String
+        let description: String
+        let category: String
+        let recommended: Bool
+    }
+
+    struct DependencyResult: Codable {
+        let dependencyId: String
+        let success: Bool
+        let error: String?
+        let method: String
+    }
+
+    func listDependencies() -> [DependencyInfo] {
+        guard let ptr = managerPtr else { return [] }
+        let jsonPtr = cauldron_list_dependencies(ptr)
+        guard let resultString = consumeCString(jsonPtr) else { return [] }
+        return decodeJSON(resultString) ?? []
+    }
+
+    nonisolated func installDependency(bottleId: String, dependencyId: String) -> DependencyResult? {
+        guard let ptr = managerPtr else { return nil }
+        let jsonPtr = bottleId.withCString { bidCStr in
+            dependencyId.withCString { depCStr in
+                cauldron_install_dependency(ptr, bidCStr, depCStr)
+            }
+        }
+        guard let resultString = consumeCString(jsonPtr) else { return nil }
+        return decodeJSON(resultString)
+    }
+
+    // MARK: - D3DMetal / GPTK
+
+    struct D3DMetalInfo: Codable {
+        let source: String   // "crossover", "gptk", "custom", "imported", "none"
+        let label: String
+        let path: String
+        let imported: Bool
+    }
+
+    struct ImportResult: Codable {
+        let success: Bool
+        let error: String?
+        let path: String?
+        let source: String?
+    }
+
+    func detectD3DMetal() -> D3DMetalInfo? {
+        guard let ptr = managerPtr else { return nil }
+        let jsonPtr = cauldron_detect_d3dmetal(ptr)
+        guard let resultString = consumeCString(jsonPtr) else { return nil }
+        return decodeJSON(resultString)
+    }
+
+    nonisolated func importD3DMetal(customPath: String? = nil) -> ImportResult? {
+        guard let ptr = managerPtr else { return nil }
+        let jsonPtr: UnsafeMutablePointer<CChar>?
+        if let path = customPath {
+            jsonPtr = path.withCString { cauldron_import_d3dmetal(ptr, $0) }
+        } else {
+            jsonPtr = cauldron_import_d3dmetal(ptr, nil)
         }
         guard let resultString = consumeCString(jsonPtr) else { return nil }
         return decodeJSON(resultString)
@@ -241,6 +395,153 @@ final class CauldronBridge: Sendable {
             log("DECODE OK: \(bottle!.name)")
         }
         return bottle
+    }
+
+    // MARK: - RosettaX87
+
+    struct RosettaX87Status: Codable {
+        let available: Bool
+        let path: String
+        let label: String
+    }
+
+    func detectRosettaX87() -> RosettaX87Status? {
+        guard let ptr = managerPtr else { return nil }
+        let jsonPtr = cauldron_detect_rosettax87(ptr)
+        guard let resultString = consumeCString(jsonPtr) else { return nil }
+        return decodeJSON(resultString)
+    }
+
+    // MARK: - Game Binary Patches
+
+    struct GamePatchResult: Codable {
+        let gameTitle: String?
+        let exePath: String?
+        let patchesApplied: Int?
+        let patchesAvailable: Int?
+        let alreadyPatched: Bool?
+        let canRestore: Bool?
+        let error: String?
+    }
+
+    struct GamePatchSet: Codable, Identifiable {
+        var id: String { title }
+        let title: String
+        let steamAppId: Int?
+        let exeName: String
+        let category: String?
+    }
+
+    func scanGamePatches(bottleId: String) -> [GamePatchResult] {
+        guard let ptr = managerPtr else { return [] }
+        let jsonPtr = bottleId.withCString { cauldron_scan_game_patches(ptr, $0) }
+        guard let resultString = consumeCString(jsonPtr) else { return [] }
+        return decodeJSON(resultString) ?? []
+    }
+
+    nonisolated func applyGamePatch(exePath: String) -> GamePatchResult? {
+        guard let ptr = managerPtr else { return nil }
+        let jsonPtr = exePath.withCString { cauldron_apply_game_patch(ptr, $0) }
+        guard let resultString = consumeCString(jsonPtr) else { return nil }
+        return decodeJSON(resultString)
+    }
+
+    nonisolated func restoreGameExe(exePath: String) -> Bool {
+        guard let ptr = managerPtr else { return false }
+        let jsonPtr = exePath.withCString { cauldron_restore_game_exe(ptr, $0) }
+        guard let resultString = consumeCString(jsonPtr) else { return false }
+        struct Result: Codable { let success: Bool }
+        let result: Result? = decodeJSON(resultString)
+        return result?.success ?? false
+    }
+
+    func listKnownGamePatches() -> [GamePatchSet] {
+        guard let ptr = managerPtr else { return [] }
+        let jsonPtr = cauldron_list_known_game_patches(ptr)
+        guard let resultString = consumeCString(jsonPtr) else { return [] }
+        return decodeJSON(resultString) ?? []
+    }
+
+    // MARK: - Game Profiles
+
+    struct SeedResult: Codable {
+        let success: Bool
+        let profilesSeeded: Int?
+        let totalProfiles: Int?
+    }
+
+    func seedGameProfiles() -> SeedResult? {
+        guard let ptr = managerPtr else { return nil }
+        let jsonPtr = cauldron_seed_game_profiles(ptr)
+        guard let resultString = consumeCString(jsonPtr) else { return nil }
+        return decodeJSON(resultString)
+    }
+
+    // MARK: - Game Recommendations
+
+    struct GameRecommendation: Codable {
+        let found: Bool
+        let backend: String?
+        let notes: String?
+        let rosettaX87: Bool?
+        let asyncShader: Bool?
+        let metalfxUpscaling: Bool?
+        let dxrRayTracing: Bool?
+        let fsrEnabled: Bool?
+        let windowsVersion: String?
+        let launchArgs: String?
+        let autoApplyPatches: Bool?
+    }
+
+    func getGameRecommendation(appId: UInt32) -> GameRecommendation? {
+        guard let ptr = managerPtr else { return nil }
+        let jsonPtr = cauldron_get_game_recommendation(ptr, appId)
+        guard let resultString = consumeCString(jsonPtr) else { return nil }
+        return decodeJSON(resultString)
+    }
+
+    // MARK: - Runtime Downloads
+
+    struct RuntimeDownloadResults: Codable {
+        let success: Bool
+        let results: [RuntimeDownloadEntry]?
+    }
+
+    struct RuntimeDownloadEntry: Codable {
+        let component: String
+        let version: String
+        let status: String
+        let error: String?
+    }
+
+    /// Download all graphics runtimes (DXVK, DXMT, MoltenVK, VKD3D-Proton).
+    /// Blocking call — run from a background thread.
+    nonisolated func downloadAllRuntimes() -> RuntimeDownloadResults? {
+        guard let ptr = managerPtr else { return nil }
+        let jsonPtr = cauldron_download_all_runtimes(ptr)
+        guard let resultString = consumeCString(jsonPtr) else { return nil }
+        return decodeJSON(resultString)
+    }
+
+    // MARK: - Backend Switching
+
+    struct SwitchBackendResult: Codable {
+        let success: Bool
+        let message: String?
+        let error: String?
+    }
+
+    /// Switch a bottle's graphics backend. Downloads runtime if needed,
+    /// swaps DLLs, updates registry overrides.
+    nonisolated func switchBackend(bottleId: String, backend: GraphicsBackend) -> SwitchBackendResult? {
+        guard let ptr = managerPtr else { return nil }
+        let jsonPtr = bottleId.withCString { bidCStr in
+            backend.rawValue.withCString { backendCStr in
+                cauldron_switch_backend(ptr, bidCStr, backendCStr)
+            }
+        }
+        guard let resultString = consumeCString(jsonPtr) else { return nil }
+        return decodeJSON(resultString)
     }
 
     // MARK: - Private Helpers

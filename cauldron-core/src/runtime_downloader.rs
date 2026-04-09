@@ -311,22 +311,46 @@ impl RuntimeDownloader {
     }
 }
 
+/// Info about a detected D3DMetal source.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct D3DMetalSource {
+    /// Where it was found: "crossover", "gptk", "custom", or "none"
+    pub source: String,
+    /// Human-readable label
+    pub label: String,
+    /// Path to D3DMetal.framework
+    pub path: String,
+    /// Whether it's been imported into Cauldron's runtime directory
+    pub imported: bool,
+    /// Version string from Info.plist (e.g. "3.0.1"), if detected
+    pub version: Option<String>,
+}
+
 impl RuntimeDownloader {
-    /// Detect D3DMetal.framework from CrossOver or GPTK installation.
-    /// Returns the path to the D3DMetal.framework if found.
+    /// Detect D3DMetal.framework from all known sources.
+    /// Priority: CrossOver > GPTK > Cauldron deps > None
     pub fn detect_d3dmetal_source() -> Option<std::path::PathBuf> {
-        let home = dirs::home_dir()?;
+        Self::detect_d3dmetal_detailed().filter(|d| d.source != "none").map(|d| std::path::PathBuf::from(&d.path))
+    }
 
-        // 1. CrossOver — most common location
+    /// Detailed D3DMetal detection with source attribution.
+    pub fn detect_d3dmetal_detailed() -> Option<D3DMetalSource> {
+        let home = dirs::home_dir().unwrap_or_default();
+
+        // 1. CrossOver — prioritized. We complement CrossOver, not compete.
         let crossover_paths = [
-            "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib64/apple_gpt/external/D3DMetal.framework",
-            &format!("{}/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib64/apple_gpt/external/D3DMetal.framework", home.display()),
+            "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib64/apple_gptk/external/D3DMetal.framework".to_string(),
+            format!("{}/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib64/apple_gptk/external/D3DMetal.framework", home.display()),
         ];
-
         for path in &crossover_paths {
-            let p = std::path::Path::new(path);
-            if p.exists() {
-                return Some(p.to_path_buf());
+            if std::path::Path::new(path).exists() {
+                return Some(D3DMetalSource {
+                    source: "crossover".into(),
+                    label: "CrossOver (detected)".into(),
+                    path: path.clone(),
+                    imported: false,
+                    version: extract_d3dmetal_version(std::path::Path::new(path)),
+                });
             }
         }
 
@@ -336,21 +360,69 @@ impl RuntimeDownloader {
             "/usr/local/opt/game-porting-toolkit/lib/D3DMetal.framework",
             "/Library/Frameworks/D3DMetal.framework",
         ];
-
         for path in &gptk_paths {
-            let p = std::path::Path::new(path);
-            if p.exists() {
-                return Some(p.to_path_buf());
+            if std::path::Path::new(path).exists() {
+                return Some(D3DMetalSource {
+                    source: "gptk".into(),
+                    label: "Game Porting Toolkit (detected)".into(),
+                    path: path.to_string(),
+                    imported: false,
+                    version: extract_d3dmetal_version(std::path::Path::new(path)),
+                });
             }
         }
 
-        // 3. Cauldron's own deps directory
-        let cauldron_deps = std::path::Path::new("deps/cxpatcher/lib/CrossOver/lib64/apple_gpt/external/D3DMetal.framework");
-        if cauldron_deps.exists() {
-            return Some(cauldron_deps.to_path_buf());
+        // 3. Cauldron's own deps/runtime directory (previously imported)
+        let cauldron_paths = [
+            "deps/cxpatcher/lib/CrossOver/lib64/apple_gptk/external/D3DMetal.framework",
+        ];
+        for path in &cauldron_paths {
+            if std::path::Path::new(path).exists() {
+                return Some(D3DMetalSource {
+                    source: "imported".into(),
+                    label: "Previously imported".into(),
+                    path: path.to_string(),
+                    imported: true,
+                    version: extract_d3dmetal_version(std::path::Path::new(path)),
+                });
+            }
         }
 
-        None
+        // Not found
+        Some(D3DMetalSource {
+            source: "none".into(),
+            label: "Not found".into(),
+            path: String::new(),
+            imported: false,
+            version: None,
+        })
+    }
+
+    /// Import D3DMetal from a specific path into Cauldron's runtime directory.
+    pub fn import_d3dmetal(source_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<std::path::PathBuf, RuntimeDownloadError> {
+        let dest = dest_dir.join("d3dmetal").join("D3DMetal.framework");
+        if dest.exists() {
+            // Already imported — check if source is newer
+            tracing::info!("D3DMetal already imported at {}", dest.display());
+            return Ok(dest);
+        }
+
+        std::fs::create_dir_all(dest.parent().unwrap())?;
+
+        // Use ditto for framework copy (preserves symlinks, code signatures)
+        let output = std::process::Command::new("ditto")
+            .args([source_path.to_str().unwrap_or(""), dest.to_str().unwrap_or("")])
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(RuntimeDownloadError::ExtractionFailed(
+                format!("ditto failed: {}", stderr.chars().take(200).collect::<String>())
+            ));
+        }
+
+        tracing::info!("D3DMetal imported from {} to {}", source_path.display(), dest.display());
+        Ok(dest)
     }
 }
 
@@ -544,4 +616,73 @@ mod tests {
         assert!(parent.join("file.txt").exists());
         assert!(!child.exists());
     }
+}
+
+/// Extract CFBundleShortVersionString from a D3DMetal.framework's Info.plist.
+fn extract_d3dmetal_version(framework_path: &std::path::Path) -> Option<String> {
+    let candidates = [
+        framework_path.join("Resources/Info.plist"),
+        framework_path.join("Info.plist"),
+    ];
+    for plist_path in &candidates {
+        if let Ok(content) = fs::read_to_string(plist_path) {
+            if let Some(key_pos) = content.find("<key>CFBundleShortVersionString</key>") {
+                let after_key = &content[key_pos..];
+                if let Some(str_start) = after_key.find("<string>") {
+                    let value_start = str_start + "<string>".len();
+                    if let Some(str_end) = after_key[value_start..].find("</string>") {
+                        let version = after_key[value_start..value_start + str_end].trim().to_string();
+                        if !version.is_empty() {
+                            return Some(version);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Set up DLSS-to-MetalFX translation in a bottle (GPTK 3.0+).
+/// Copies nvngx-on-metalfx.dll -> nvngx.dll and nvapi64.dll into system32.
+pub fn setup_dlss_metalfx(d3dmetal_path: &std::path::Path, bottle_path: &std::path::Path) -> Result<Vec<std::path::PathBuf>, RuntimeDownloadError> {
+    let base = d3dmetal_path
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or(d3dmetal_path);
+
+    let dll_dir = base.join("wine/x86_64-windows");
+    let nvngx_src = dll_dir.join("nvngx-on-metalfx.dll");
+
+    if !nvngx_src.exists() {
+        return Ok(Vec::new());
+    }
+
+    let system32 = bottle_path.join("drive_c/windows/system32");
+    if !system32.exists() {
+        fs::create_dir_all(&system32)?;
+    }
+
+    let mut copied = Vec::new();
+
+    let nvngx_dest = system32.join("nvngx.dll");
+    if nvngx_dest.exists() {
+        let backup = nvngx_dest.with_extension("dll.cauldron_backup");
+        fs::copy(&nvngx_dest, &backup)?;
+    }
+    fs::copy(&nvngx_src, &nvngx_dest)?;
+    copied.push(nvngx_dest);
+
+    let nvapi_src = dll_dir.join("nvapi64.dll");
+    if nvapi_src.exists() {
+        let nvapi_dest = system32.join("nvapi64.dll");
+        if nvapi_dest.exists() {
+            let backup = nvapi_dest.with_extension("dll.cauldron_backup");
+            fs::copy(&nvapi_dest, &backup)?;
+        }
+        fs::copy(&nvapi_src, &nvapi_dest)?;
+        copied.push(nvapi_dest);
+    }
+
+    Ok(copied)
 }

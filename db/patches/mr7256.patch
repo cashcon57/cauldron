@@ -1,0 +1,150 @@
+From b1d3242e680107687e6f73c8acd8f9f5d88c8b5f Mon Sep 17 00:00:00 2001
+From: Marc-Aurel Zent <mzent@codeweavers.com>
+Date: Tue, 17 Dec 2024 08:55:36 +0700
+Subject: [PATCH 1/4] ntdll: Always use mach_continuous_approximate_time on
+ macOS.
+
+mach_continuous_approximate_time() has the necessary precision for
+win32 ticks and can be up to 4x faster than mach_continuous_time().
+---
+ dlls/ntdll/unix/sync.c | 2 +-
+ server/request.c       | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 2b01aaf83b8..21f194c9b35 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -85,7 +85,7 @@ static inline ULONGLONG monotonic_counter(void)
+     static mach_timebase_info_data_t timebase;
+ 
+     if (!timebase.denom) mach_timebase_info( &timebase );
+-    return mach_continuous_time() * timebase.numer / timebase.denom / 100;
++    return mach_continuous_approximate_time() * timebase.numer / timebase.denom / 100;
+ #elif defined(HAVE_CLOCK_GETTIME)
+     struct timespec ts;
+ #ifdef CLOCK_MONOTONIC_RAW
+diff --git a/server/request.c b/server/request.c
+index 2254315b79e..c91b718c011 100644
+--- a/server/request.c
++++ b/server/request.c
+@@ -511,7 +511,7 @@ timeout_t monotonic_counter(void)
+     static mach_timebase_info_data_t timebase;
+ 
+     if (!timebase.denom) mach_timebase_info( &timebase );
+-    return mach_continuous_time() * timebase.numer / timebase.denom / 100;
++    return mach_continuous_approximate_time() * timebase.numer / timebase.denom / 100;
+ #elif defined(HAVE_CLOCK_GETTIME)
+     struct timespec ts;
+ #ifdef CLOCK_MONOTONIC_RAW
+-- 
+GitLab
+
+
+From 83d0ec2be55938cf3137b429029b4fe9c7be8f44 Mon Sep 17 00:00:00 2001
+From: Marc-Aurel Zent <mzent@codeweavers.com>
+Date: Tue, 17 Dec 2024 09:08:29 +0700
+Subject: [PATCH 2/4] ntdll: Use __commpage_gettimeofday in NtQuerySystemTime
+ on macOS.
+
+---
+ dlls/ntdll/unix/sync.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 21f194c9b35..3665b8b8626 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -1704,7 +1704,17 @@ NTSTATUS WINAPI NtQueryPerformanceCounter( LARGE_INTEGER *counter, LARGE_INTEGER
+  */
+ NTSTATUS WINAPI NtQuerySystemTime( LARGE_INTEGER *time )
+ {
+-#ifdef HAVE_CLOCK_GETTIME
++#ifdef __APPLE__
++    /* On macOS clock_gettime() will eventually call into this, given a
++     * CLOCK_REALTIME clock_id.
++     * Similarly would gettimeofday(). For performance reasons this is directly
++     * linked against here. */
++    extern int __commpage_gettimeofday( struct timeval *tp ) __attribute__((weak_import));
++    struct timeval tp;
++    if (__commpage_gettimeofday != NULL && __commpage_gettimeofday( &tp ) == KERN_SUCCESS)
++        time->QuadPart = ticks_from_time_t( tp.tv_sec ) + tp.tv_usec * 10;
++    else
++#elif defined(HAVE_CLOCK_GETTIME)
+     struct timespec ts;
+     static clockid_t clock_id = CLOCK_MONOTONIC; /* placeholder */
+ 
+-- 
+GitLab
+
+
+From b8ef86d06efde27a30fa92ea2bbf20cfc1bbab57 Mon Sep 17 00:00:00 2001
+From: Marc-Aurel Zent <mzent@codeweavers.com>
+Date: Wed, 12 Feb 2025 12:25:15 +0100
+Subject: [PATCH 3/4] ntdll: Use gettimeofday in system_time_precise on macOS.
+
+---
+ dlls/ntdll/unix/sync.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 3665b8b8626..47c10e80b6b 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -1831,7 +1831,8 @@ NTSTATUS system_time_precise( void *args )
+ {
+     LONGLONG *ret = args;
+     struct timeval now;
+-#ifdef HAVE_CLOCK_GETTIME
++    /* Excluding macOS here for the reason outlined in NtQuerySystemTime */
++#if defined(HAVE_CLOCK_GETTIME) && !defined(__APPLE__)
+     struct timespec ts;
+ 
+     if (!clock_gettime( CLOCK_REALTIME, &ts ))
+-- 
+GitLab
+
+
+From cd498218b687820f014a8ec4e10c297cc2d503fd Mon Sep 17 00:00:00 2001
+From: Marc-Aurel Zent <mzent@codeweavers.com>
+Date: Tue, 4 Feb 2025 23:39:45 +0100
+Subject: [PATCH 4/4] ntdll: Replace '0' with 'NULL' in gettimeofday() calls.
+
+---
+ dlls/ntdll/unix/sync.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 47c10e80b6b..d20dc4eed13 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -95,7 +95,7 @@ static inline ULONGLONG monotonic_counter(void)
+     if (!clock_gettime( CLOCK_MONOTONIC, &ts ))
+         return ts.tv_sec * (ULONGLONG)TICKSPERSEC + ts.tv_nsec / 100;
+ #endif
+-    gettimeofday( &now, 0 );
++    gettimeofday( &now, NULL );
+     return ticks_from_time_t( now.tv_sec ) + now.tv_usec * 10 - server_start_time;
+ }
+ 
+@@ -1740,7 +1740,7 @@ NTSTATUS WINAPI NtQuerySystemTime( LARGE_INTEGER *time )
+     {
+         struct timeval now;
+ 
+-        gettimeofday( &now, 0 );
++        gettimeofday( &now, NULL );
+         time->QuadPart = ticks_from_time_t( now.tv_sec ) + now.tv_usec * 10;
+     }
+     return STATUS_SUCCESS;
+@@ -1841,7 +1841,7 @@ NTSTATUS system_time_precise( void *args )
+         return STATUS_SUCCESS;
+     }
+ #endif
+-    gettimeofday( &now, 0 );
++    gettimeofday( &now, NULL );
+     *ret = ticks_from_time_t( now.tv_sec ) + now.tv_usec * 10;
+     return STATUS_SUCCESS;
+ }
+-- 
+GitLab
+

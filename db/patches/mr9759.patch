@@ -1,0 +1,107 @@
+From 1c349a9a600ecdd9b2d56768c88138abfe666583 Mon Sep 17 00:00:00 2001
+From: Sven Baars <sbaars@codeweavers.com>
+Date: Fri, 12 Dec 2025 15:16:08 +0100
+Subject: [PATCH 1/2] ntdll: Use the correct CPU tick length on macOS.
+
+According to the XNU source, this is 10ms.
+
+Based on a patch by Tim Clem.
+---
+ dlls/ntdll/unix/system.c | 13 ++++---------
+ 1 file changed, 4 insertions(+), 9 deletions(-)
+
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index 5381179d48e..f6fa89c4116 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -2454,12 +2454,7 @@ static void get_performance_info( SYSTEM_PERFORMANCE_INFORMATION *info )
+ 
+         count = HOST_CPU_LOAD_INFO_COUNT;
+         if (host_statistics(host, HOST_CPU_LOAD_INFO, (host_info_t)&load_info, &count) == KERN_SUCCESS)
+-        {
+-            /* Believe it or not, based on my reading of XNU source, this is
+-             * already in the units we want (100 ns).
+-             */
+-            info->IdleTime.QuadPart = load_info.cpu_ticks[CPU_STATE_IDLE];
+-        }
++            info->IdleTime.QuadPart = (ULONGLONG)load_info.cpu_ticks[CPU_STATE_IDLE] * 100000;
+         mach_port_deallocate(mach_task_self(), host);
+     }
+ #else
+@@ -3287,9 +3282,9 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
+                 cpus = min(cpus,out_cpus);
+                 for (i = 0; i < cpus; i++)
+                 {
+-                    sppi[i].IdleTime.QuadPart = pinfo[i].cpu_ticks[CPU_STATE_IDLE];
+-                    sppi[i].KernelTime.QuadPart = pinfo[i].cpu_ticks[CPU_STATE_SYSTEM];
+-                    sppi[i].UserTime.QuadPart = pinfo[i].cpu_ticks[CPU_STATE_USER];
++                    sppi[i].IdleTime.QuadPart = (ULONGLONG)pinfo[i].cpu_ticks[CPU_STATE_IDLE] * 100000;
++                    sppi[i].KernelTime.QuadPart = (ULONGLONG)pinfo[i].cpu_ticks[CPU_STATE_SYSTEM] * 100000;
++                    sppi[i].UserTime.QuadPart = (ULONGLONG)pinfo[i].cpu_ticks[CPU_STATE_USER] * 100000;
+                 }
+                 vm_deallocate (mach_task_self (), (vm_address_t) pinfo, info_count * sizeof(natural_t));
+             }
+-- 
+GitLab
+
+
+From 99696cf57d7a60c94f8b01e93a3b53310b658323 Mon Sep 17 00:00:00 2001
+From: Sven Baars <sbaars@codeweavers.com>
+Date: Fri, 12 Dec 2025 15:19:09 +0100
+Subject: [PATCH 2/2] ntdll: Include idle time in kernel time on all platforms.
+
+This was done for Linux in cc01c46f415821ec458845f678287a2419a11a7d.
+---
+ dlls/ntdll/tests/info.c  | 4 ++++
+ dlls/ntdll/unix/system.c | 6 ++++--
+ 2 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/tests/info.c b/dlls/ntdll/tests/info.c
+index c56345b867a..f2704978535 100644
+--- a/dlls/ntdll/tests/info.c
++++ b/dlls/ntdll/tests/info.c
+@@ -781,6 +781,8 @@ static void test_query_procperf(void)
+     ok (sppi->KernelTime.QuadPart != 0xdeaddead, "KernelTime unchanged\n");
+     ok (sppi->UserTime.QuadPart != 0xdeaddead, "UserTime unchanged\n");
+     ok (sppi->IdleTime.QuadPart != 0xdeaddead, "IdleTime unchanged\n");
++    ok (sppi->KernelTime.QuadPart > sppi->IdleTime.QuadPart,
++        "Expected %I64u > %I64u\n", sppi->KernelTime.QuadPart, sppi->IdleTime.QuadPart);
+ 
+     /* Try it for all processors */
+     sppi->KernelTime.QuadPart = 0xdeaddead;
+@@ -792,6 +794,8 @@ static void test_query_procperf(void)
+     ok (sppi->KernelTime.QuadPart != 0xdeaddead, "KernelTime unchanged\n");
+     ok (sppi->UserTime.QuadPart != 0xdeaddead, "UserTime unchanged\n");
+     ok (sppi->IdleTime.QuadPart != 0xdeaddead, "IdleTime unchanged\n");
++    ok (sppi->KernelTime.QuadPart > sppi->IdleTime.QuadPart,
++        "Expected %I64u > %I64u\n", sppi->KernelTime.QuadPart, sppi->IdleTime.QuadPart);
+ 
+     /* A too large given buffer size */
+     sppi = HeapReAlloc(GetProcessHeap(), 0, sppi , NeededLength + 2);
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index f6fa89c4116..350bcea4f86 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -3283,7 +3283,8 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
+                 for (i = 0; i < cpus; i++)
+                 {
+                     sppi[i].IdleTime.QuadPart = (ULONGLONG)pinfo[i].cpu_ticks[CPU_STATE_IDLE] * 100000;
+-                    sppi[i].KernelTime.QuadPart = (ULONGLONG)pinfo[i].cpu_ticks[CPU_STATE_SYSTEM] * 100000;
++                    sppi[i].KernelTime.QuadPart = (ULONGLONG)pinfo[i].cpu_ticks[CPU_STATE_SYSTEM] * 100000 +
++                                                  sppi[i].IdleTime.QuadPart;
+                     sppi[i].UserTime.QuadPart = (ULONGLONG)pinfo[i].cpu_ticks[CPU_STATE_USER] * 100000;
+                 }
+                 vm_deallocate (mach_task_self (), (vm_address_t) pinfo, info_count * sizeof(natural_t));
+@@ -3344,7 +3345,8 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
+                     {
+                         if (cpus * CPUSTATES * sizeof(long) >= size) break;
+                         sppi[cpus].IdleTime.QuadPart = (ULONGLONG)ptimes[cpus*CPUSTATES + CP_IDLE] * 10000000 / clockrate.stathz;
+-                        sppi[cpus].KernelTime.QuadPart = (ULONGLONG)ptimes[cpus*CPUSTATES + CP_SYS] * 10000000 / clockrate.stathz;
++                        sppi[cpus].KernelTime.QuadPart = (ULONGLONG)ptimes[cpus*CPUSTATES + CP_SYS] * 10000000 / clockrate.stathz +
++                                                         sppi[cpus].IdleTime.QuadPart;
+                         sppi[cpus].UserTime.QuadPart = (ULONGLONG)ptimes[cpus*CPUSTATES + CP_USER] * 10000000 / clockrate.stathz;
+                     }
+                 }
+-- 
+GitLab
+

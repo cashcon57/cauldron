@@ -154,4 +154,41 @@ char *cauldron_skip_patch(void *mgr, const char *hash);
  */
 char *cauldron_reverse_patch(void *mgr, const char *hash);
 
+char *cauldron_detect_d3dmetal(void *_mgr);
+
+char *cauldron_setup_dlss_metalfx(void *mgr, const char *bottle_id);
+
+char *cauldron_import_d3dmetal(void *_mgr, const char *_path);
+
+char *cauldron_detect_rosettax87(void *_mgr);
+
+char *cauldron_scan_game_patches(void *_mgr, const char *_bid);
+
+char *cauldron_apply_game_patch(void *_mgr, const char *_exe);
+
+char *cauldron_restore_game_exe(void *_mgr, const char *_exe);
+
+char *cauldron_list_known_game_patches(void *_mgr);
+
+char *cauldron_seed_game_profiles(void *_mgr);
+
+char *cauldron_get_game_recommendation(void *_mgr, uint32_t _app_id);
+
+char *cauldron_download_all_runtimes(void *_mgr);
+
+char *cauldron_list_dependencies(void *_mgr);
+
+char *cauldron_install_dependency(void *_mgr, const char *_bid, const char *_dep);
+
+char *cauldron_is_bottle_running(void *_mgr, const char *_bid);
+
+char *cauldron_kill_bottle(void *_mgr, const char *_bid);
+
+/**
+ * Switch a bottle's graphics backend (stub — backend switching now handled via env vars at launch).
+ */
+char *cauldron_switch_backend(void *_mgr,
+                              const char *_bottle_id,
+                              const char *_backend);
+
 #endif  /* CAULDRON_H */

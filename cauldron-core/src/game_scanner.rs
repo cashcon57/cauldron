@@ -15,6 +15,24 @@ pub enum ScanError {
 
 type Result<T> = std::result::Result<T, ScanError>;
 
+/// Graphics API detected from PE imports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetectedGraphicsAPI {
+    DirectX(u8), // 8, 9, 10, 11, 12
+    Vulkan,
+    OpenGL,
+}
+
+impl std::fmt::Display for DetectedGraphicsAPI {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DirectX(v) => write!(f, "DX{v}"),
+            Self::Vulkan => write!(f, "Vulkan"),
+            Self::OpenGL => write!(f, "OpenGL"),
+        }
+    }
+}
+
 /// A game detected inside a bottle.
 #[derive(Debug, Clone)]
 pub struct DetectedGame {
@@ -25,6 +43,8 @@ pub struct DetectedGame {
     pub bottle_id: String,
     pub size_bytes: u64,
     pub dx_version: Option<u8>,
+    /// All graphics APIs detected from PE imports.
+    pub graphics_apis: Vec<DetectedGraphicsAPI>,
 }
 
 /// Parsed contents of a Steam `.acf` app manifest.
@@ -211,7 +231,11 @@ impl GameScanner {
                 }
 
                 let exe_hash = Self::hash_exe_head(&path).ok();
-                let dx_version = Self::detect_dx_version(&path);
+                let graphics_apis = Self::detect_graphics_apis(&path);
+                let dx_version = graphics_apis.iter().filter_map(|a| match a {
+                    DetectedGraphicsAPI::DirectX(v) => Some(*v),
+                    _ => None,
+                }).max();
 
                 // Derive a title from the file stem
                 let title = path
@@ -228,6 +252,7 @@ impl GameScanner {
                     bottle_id: bottle_id.to_string(),
                     size_bytes: size,
                     dx_version,
+                    graphics_apis,
                 });
             }
         }
@@ -286,7 +311,11 @@ impl GameScanner {
                         {
                             let metadata = fs::metadata(&exe_path)?;
                             let exe_hash = Self::hash_exe_head(&exe_path).ok();
-                            let dx_version = Self::detect_dx_version(&exe_path);
+                            let graphics_apis = Self::detect_graphics_apis(&exe_path);
+                            let dx_version = graphics_apis.iter().filter_map(|a| match a {
+                                DetectedGraphicsAPI::DirectX(v) => Some(*v),
+                                _ => None,
+                            }).max();
 
                             games.push(DetectedGame {
                                 title: manifest.name.clone(),
@@ -296,6 +325,7 @@ impl GameScanner {
                                 bottle_id: bottle_id.clone(),
                                 size_bytes: metadata.len(),
                                 dx_version,
+                                graphics_apis,
                             });
                             found_exe = true;
                             break;
@@ -313,6 +343,7 @@ impl GameScanner {
                         bottle_id: bottle_id.clone(),
                         size_bytes: manifest.size_on_disk,
                         dx_version: None,
+                        graphics_apis: Vec::new(),
                     });
                 }
             } else {
@@ -330,6 +361,7 @@ impl GameScanner {
                     bottle_id,
                     size_bytes: manifest.size_on_disk,
                     dx_version: None,
+                    graphics_apis: Vec::new(),
                 });
             }
         }
@@ -468,32 +500,86 @@ impl GameScanner {
     /// Detect the DirectX version an executable targets by reading its PE
     /// import table and looking for D3D DLL imports.
     pub fn detect_dx_version(exe_path: &Path) -> Option<u8> {
-        tracing::trace!(exe = %exe_path.display(), "Detecting DirectX version via PE imports");
-        let data = fs::read(exe_path).ok()?;
-        let imports = Self::read_pe_imports(&data)?;
+        let apis = Self::detect_graphics_apis(exe_path);
+        apis.iter()
+            .filter_map(|api| match api {
+                DetectedGraphicsAPI::DirectX(v) => Some(*v),
+                _ => None,
+            })
+            .max()
+    }
 
-        let mut max_dx: Option<u8> = None;
+    /// Detect all graphics APIs an executable links against by reading its
+    /// PE import table. Covers DX8-12, Vulkan, and OpenGL.
+    pub fn detect_graphics_apis(exe_path: &Path) -> Vec<DetectedGraphicsAPI> {
+        tracing::trace!(exe = %exe_path.display(), "Detecting graphics APIs via PE imports");
+        let data = match fs::read(exe_path) {
+            Ok(d) => d,
+            Err(_) => return Vec::new(),
+        };
+        let imports = match Self::read_pe_imports(&data) {
+            Some(i) => i,
+            None => return Vec::new(),
+        };
+
+        let mut apis = Vec::new();
+        let mut seen_dx = std::collections::HashSet::new();
 
         for dll_name in &imports {
             let lower = dll_name.to_ascii_lowercase();
-            let dx = if lower == "d3d12.dll" {
-                Some(12)
-            } else if lower == "d3d11.dll" {
-                Some(11)
-            } else if lower == "d3d10.dll" || lower == "d3d10core.dll" {
-                Some(10)
-            } else if lower == "d3d9.dll" {
-                Some(9)
-            } else {
-                None
-            };
 
-            if let Some(v) = dx {
-                max_dx = Some(max_dx.map_or(v, |cur| cur.max(v)));
+            // DirectX 12
+            if lower == "d3d12.dll" || lower == "d3d12core.dll" {
+                if seen_dx.insert(12) {
+                    apis.push(DetectedGraphicsAPI::DirectX(12));
+                }
+            }
+            // DirectX 11
+            else if lower == "d3d11.dll" {
+                if seen_dx.insert(11) {
+                    apis.push(DetectedGraphicsAPI::DirectX(11));
+                }
+            }
+            // DirectX 10
+            else if lower == "d3d10.dll" || lower == "d3d10core.dll" || lower == "d3d10_1.dll" || lower == "d3d10_1core.dll" {
+                if seen_dx.insert(10) {
+                    apis.push(DetectedGraphicsAPI::DirectX(10));
+                }
+            }
+            // DirectX 9
+            else if lower == "d3d9.dll" || lower == "d3dx9_43.dll" || lower == "d3dx9_42.dll"
+                || lower == "d3dx9_41.dll" || lower == "d3dx9_40.dll" || lower == "d3dx9_39.dll"
+                || lower == "d3dx9_38.dll" || lower == "d3dx9_37.dll" || lower == "d3dx9_36.dll"
+                || lower == "d3dx9_35.dll" || lower == "d3dx9_34.dll" || lower == "d3dx9_33.dll"
+                || lower == "d3dx9_32.dll" || lower == "d3dx9_31.dll" || lower == "d3dx9_30.dll"
+                || lower == "d3dx9_29.dll" || lower == "d3dx9_28.dll" || lower == "d3dx9_27.dll"
+                || lower == "d3dx9_26.dll" || lower == "d3dx9_25.dll" || lower == "d3dx9_24.dll"
+            {
+                if seen_dx.insert(9) {
+                    apis.push(DetectedGraphicsAPI::DirectX(9));
+                }
+            }
+            // DirectX 8
+            else if lower == "d3d8.dll" || lower == "d3dx8.dll" || lower == "d3dx8d.dll" {
+                if seen_dx.insert(8) {
+                    apis.push(DetectedGraphicsAPI::DirectX(8));
+                }
+            }
+            // Vulkan
+            else if lower == "vulkan-1.dll" || lower == "vulkan.dll" {
+                if !apis.contains(&DetectedGraphicsAPI::Vulkan) {
+                    apis.push(DetectedGraphicsAPI::Vulkan);
+                }
+            }
+            // OpenGL
+            else if lower == "opengl32.dll" {
+                if !apis.contains(&DetectedGraphicsAPI::OpenGL) {
+                    apis.push(DetectedGraphicsAPI::OpenGL);
+                }
             }
         }
 
-        max_dx
+        apis
     }
 
     /// Read DLL import names from a PE file's import directory table.

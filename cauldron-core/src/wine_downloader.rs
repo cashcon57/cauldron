@@ -76,22 +76,23 @@ impl WineManager {
     ///   wine-staging-<version>-osx64.tar.xz   (staging)
     pub fn available_versions(&self) -> Vec<WineVersion> {
         let known: Vec<(&str, &str, &str)> = vec![
-            // Stable releases
+            // Cauldron Wine — our patched fork (131 patches on Wine 11.6)
+            // Includes: wine-staging, Proton, CrossOver macOS fixes, performance patches,
+            // VirtualProtect COW fix, Mach write watches, GPU detection, and more.
+            ("cauldron-11.6", "cauldron", "https://github.com/niceduckdev/cauldron-wine/releases/download/cauldron-11.6/cauldron-wine-11.6-macos-arm64.tar.xz"),
+            // Upstream stable releases (vanilla, no patches)
             ("10.0", "stable", "https://github.com/Gcenx/macOS_Wine_builds/releases/download/10.0/wine-stable-10.0-osx64.tar.xz"),
             ("9.0", "stable", "https://github.com/Gcenx/macOS_Wine_builds/releases/download/9.0/wine-stable-9.0-osx64.tar.xz"),
-            ("8.0.2", "stable", "https://github.com/Gcenx/macOS_Wine_builds/releases/download/8.0.2/wine-stable-8.0.2-osx64.tar.xz"),
-            // Development releases (bleeding-edge)
+            // Development releases (vanilla, bleeding-edge)
             ("11.6", "development", "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.6/wine-devel-11.6-osx64.tar.xz"),
             ("11.5", "development", "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.5/wine-devel-11.5-osx64.tar.xz"),
-            ("10.4", "development", "https://github.com/Gcenx/macOS_Wine_builds/releases/download/10.4/wine-devel-10.4-osx64.tar.xz"),
-            ("10.3", "development", "https://github.com/Gcenx/macOS_Wine_builds/releases/download/10.3/wine-devel-10.3-osx64.tar.xz"),
             // Staging releases
             ("10.3", "staging", "https://github.com/Gcenx/macOS_Wine_builds/releases/download/10.3/wine-staging-10.3-osx64.tar.xz"),
             // GPTK-style Wine (Apple Game Porting Toolkit compatible)
             ("gptk-2.0", "gptk", "https://github.com/Gcenx/macOS_Wine_builds/releases/download/gptk-2.0/wine-crossover-24.0.4-osx64.tar.xz"),
         ];
 
-        known
+        let mut versions: Vec<WineVersion> = known
             .into_iter()
             .map(|(version, category, url)| {
                 let install_path = self.versions_dir.join(version);
@@ -105,7 +106,26 @@ impl WineManager {
                     category: category.to_string(),
                 }
             })
-            .collect()
+            .collect();
+
+        // Check for a local build from `make wine-build`
+        let local_build = self.versions_dir.parent()
+            .map(|base| base.join("build/wine-dist/bin/wine64"))
+            .filter(|p| p.exists());
+        if let Some(wine_bin) = local_build {
+            let local_path = wine_bin.parent().unwrap().parent().unwrap().to_path_buf();
+            // Insert at the top — local build takes priority
+            versions.insert(0, WineVersion {
+                version: "cauldron-11.6-local".to_string(),
+                url: String::new(),
+                sha256: None,
+                installed: true,
+                path: local_path,
+                category: "cauldron".to_string(),
+            });
+        }
+
+        versions
     }
 
     /// Scans the versions directory and returns all installed Wine versions.

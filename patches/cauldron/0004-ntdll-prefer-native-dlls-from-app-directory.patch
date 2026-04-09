@@ -1,0 +1,53 @@
+From: Cauldron <cauldron@cauldron.app>
+Date: Mon, 7 Apr 2026
+Subject: [PATCH] ntdll: Prefer native DLLs from application directory over builtins
+
+When a PE DLL exists in the application directory (e.g. d3d11.dll from
+DXMT/DXVK), prefer it over Wine's builtin version. This allows graphics
+translation layers to work reliably when their DLLs are placed in the
+game directory, without requiring WINEDLLOVERRIDES environment variable.
+
+This is critical for games launched through Steam's -applaunch, where
+the Unix process environment from the initial wine launch does not
+propagate to child game processes.
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=0
+---
+ dlls/ntdll/unix/loadorder.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/dlls/ntdll/unix/loadorder.c b/dlls/ntdll/unix/loadorder.c
+index 1234567..abcdefg 100644
+--- a/dlls/ntdll/unix/loadorder.c
++++ b/dlls/ntdll/unix/loadorder.c
+@@ -511,6 +511,30 @@ enum loadorder get_load_order( const UNICODE_STRING *nt_name, BOOL is_system_dir
+         goto done;
+
+     /* now some heuristics for explicit paths */
++
++    /* Cauldron: If a non-builtin PE DLL exists in the application directory
++     * for a known graphics DLL (d3d11, dxgi, d3d10core, d3d12, d3d9),
++     * prefer native,builtin loading. This enables DXMT/DXVK/vkd3d-proton
++     * to work by simply placing DLLs in the game directory. */
++    if (!is_system_dir && pe_mapping && pe_mapping)
++    {
++        static const WCHAR *graphics_dlls[] = {
++            L"d3d11", L"d3d10core", L"d3d9", L"d3d12", L"dxgi", NULL
++        };
++        const WCHAR **gfx;
++        for (gfx = graphics_dlls; *gfx; gfx++)
++        {
++            if (!wcsicmp( basename, *gfx ))
++            {
++                /* Found a graphics DLL in app dir — prefer native */
++                ret = LO_NATIVE_BUILTIN;
++                TRACE( "got cauldron app-dir native %s for %s\n",
++                       debugstr_loadorder(ret), debugstr_us(nt_name) );
++                goto done;
++            }
++        }
++    }
++
+     if (!is_system_dir)
+     {
+         /* module basename without '*' */

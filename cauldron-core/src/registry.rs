@@ -424,6 +424,35 @@ pub fn set_dll_override(
     )
 }
 
+/// Set a per-application DLL override in the Wine registry.
+///
+/// Writes to `[Software\\Wine\\AppDefaults\\<exe_name>\\DllOverrides]` in `user.reg`.
+/// This scopes the override to only that executable, preventing conflicts with
+/// other Wine processes (e.g. steamwebhelper.exe crashing when d3d11=native is global).
+pub fn set_app_dll_override(
+    bottle_path: &Path,
+    exe_name: &str,
+    dll_name: &str,
+    mode: &str,
+) -> Result<(), RegistryError> {
+    tracing::debug!(exe = %exe_name, dll = %dll_name, mode = %mode, "Setting per-app DLL override");
+    let valid_modes = ["native", "builtin", "native,builtin", "builtin,native", "disabled", ""];
+    if !valid_modes.contains(&mode) {
+        tracing::warn!(mode = %mode, "Invalid DLL override mode");
+        return Err(RegistryError::InvalidOverrideMode(mode.to_string()));
+    }
+
+    let key_path = format!("Software\\\\Wine\\\\AppDefaults\\\\{}\\\\DllOverrides", exe_name);
+    set_value(
+        bottle_path,
+        RegistryHive::User,
+        &key_path,
+        dll_name,
+        RegValueType::String,
+        mode,
+    )
+}
+
 // --- Internal text manipulation helpers ---
 
 /// Format a value line for writing into a registry file.

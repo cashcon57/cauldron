@@ -1,0 +1,41 @@
+From 2b2c4e3862bffe5145c0e3474e349fa3dbdd0bbc Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Fri, 16 Jan 2026 11:09:59 +0100
+Subject: [PATCH] winemac: Avoid updating client surface views unnecessarily.
+
+---
+ dlls/winemac.drv/macdrv.h | 2 ++
+ dlls/winemac.drv/window.c | 4 ++++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/dlls/winemac.drv/macdrv.h b/dlls/winemac.drv/macdrv.h
+index ac2a7853652..3d9d1d3f7b8 100644
+--- a/dlls/winemac.drv/macdrv.h
++++ b/dlls/winemac.drv/macdrv.h
+@@ -197,6 +197,8 @@ extern BOOL macdrv_SystemParametersInfo(UINT action, UINT int_param, void *ptr_p
+     macdrv_view           cocoa_view;
+     macdrv_metal_device   metal_device;
+     macdrv_metal_view     metal_view;
++    HWND                  toplevel;
++    RECT                  rect;
+ };
+ 
+ static inline struct macdrv_client_surface *impl_from_client_surface(struct client_surface *client)
+diff --git a/dlls/winemac.drv/window.c b/dlls/winemac.drv/window.c
+index 9420e17f810..49d483e1c62 100644
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -1113,6 +1113,10 @@ static void macdrv_client_surface_update(struct client_surface *client)
+     NtUserGetClientRect(hwnd, &rect, NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI));
+     NtUserMapWindowPoints(hwnd, toplevel, (POINT *)&rect, 2, NtUserGetWinMonitorDpi(toplevel, MDT_RAW_DPI));
+ 
++    if (surface->toplevel == toplevel && EqualRect(&surface->rect, &rect)) return;
++    surface->toplevel = toplevel;
++    surface->rect = rect;
++
+     if (!(data = get_win_data(toplevel))) return;
+     OffsetRect(&rect, data->rects.client.left - data->rects.visible.left, data->rects.client.top - data->rects.visible.top);
+     macdrv_set_view_frame(surface->cocoa_view, cgrect_from_rect(rect));
+-- 
+GitLab
+

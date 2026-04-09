@@ -60,6 +60,12 @@ __pycache__/
 /deps/
 /wine/
 
+# Reverse engineering data (decompiled binaries, Ghidra projects)
+docs/re/
+
+# Business docs (private)
+BUSINESS.md
+
 # Environment
 .env
 .env.local

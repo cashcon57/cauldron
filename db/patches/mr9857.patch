@@ -1,0 +1,165 @@
+From f6c33ce55685c1980c0a76cc805fe014b9cf43f4 Mon Sep 17 00:00:00 2001
+From: Jactry Zeng <jzeng@codeweavers.com>
+Date: Thu, 1 Jan 2026 13:20:18 -0600
+Subject: [PATCH 1/2] ntdll/unix: Reimplement fill_vm_counters() for macOS.
+
+On Windows, PagefileUsage represents the total private memory committed
+by a process, includes both resident memory in RAM and pages swapped to
+the disk.
+On macOS, virtual_size is misleading as it represents the total reserved
+address space, which is often vastly larger than actual usage; for example,
+it can be 40+GB when a program was alloced about 4GB memory on a machine
+with 16GB RAM (tested on Intel macOS 15.7.2 and Apple Silicon macOS 26.2).
+
+In order to make it closer to the Windows metric, using the sum of
+TASK_VM_INFO.internal (resident private memory in RAM) and swapped
+pages (includes both compressed memory in RAM and pages that were swapped
+to the disk) from mach_vm_region_recurse() is more correct.
+I also use the sum of TASK_VM_INFO.internal and TASK_VM_INFO.compressed
+(compressed memory, and still in RAM) as a fallback when
+mach_vm_region_recurse() fails; however, this doesn't include that the
+memory has been compressed and swapped to the disk[0], but it is still
+correct relatively to the current implementation.
+
+[0] https://github.com/apple-oss-distributions/xnu/blob/f6217f/osfmk/kern/task.c#L1238
+---
+ dlls/ntdll/unix/process.c | 60 ++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 53 insertions(+), 7 deletions(-)
+
+diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
+index e97e577c213..587dc550daf 100644
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -58,6 +58,7 @@
+ #include <unistd.h>
+ #ifdef HAVE_MACH_MACH_H
+ # include <mach/mach.h>
++# include <mach/mach_vm.h>
+ #endif
+ 
+ #include "ntstatus.h"
+@@ -989,19 +990,64 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
+ 
+ void fill_vm_counters( VM_COUNTERS_EX *pvmi, int unix_pid )
+ {
+-#if defined(MACH_TASK_BASIC_INFO)
+-    struct mach_task_basic_info info;
+-    mach_msg_type_number_t infoCount;
++#if defined(TASK_VM_INFO)
++    mach_msg_type_number_t count;
++    struct task_vm_info info;
+ 
+     if (unix_pid != -1) return; /* FIXME: Retrieve information for other processes. */
+ 
+-    infoCount = MACH_TASK_BASIC_INFO_COUNT;
+-    if(task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &infoCount) == KERN_SUCCESS)
++    count = TASK_VM_INFO_COUNT;
++    if (task_info( mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count ) == KERN_SUCCESS)
+     {
++        vm_region_submap_info_data_64_t recurse_info;
++        unsigned long long swapped_pages = 0;
++        mach_vm_address_t address = 0;
++        vm_size_t mac_host_page_size;
++        mach_vm_size_t size = 0;
++        kern_return_t result;
++        uint32_t depth = 0;
++
+         pvmi->VirtualSize = info.resident_size + info.virtual_size;
+-        pvmi->PagefileUsage = info.virtual_size;
++        pvmi->PagefileUsage = info.internal;
+         pvmi->WorkingSetSize = info.resident_size;
+-        pvmi->PeakWorkingSetSize = info.resident_size_max;
++        pvmi->PeakWorkingSetSize = info.resident_size_peak;
++
++        result = host_page_size( mach_host_self(), &mac_host_page_size );
++        if (result == KERN_SUCCESS)
++        {
++            while (1)
++            {
++                count = VM_REGION_SUBMAP_INFO_COUNT_64;
++                result = mach_vm_region_recurse( mach_task_self(), &address, &size, &depth,
++                        (vm_region_recurse_info_t)&recurse_info, &count );
++                if (result != KERN_SUCCESS)
++                {
++                    if (result != KERN_INVALID_ADDRESS)
++                    {
++                        ERR("Failed to get swapped pages %#x.\n", result);
++                        swapped_pages = 0;
++                    }
++                    break;
++                }
++
++                if (recurse_info.is_submap)
++                    depth++;
++                else
++                {
++                    if (((recurse_info.share_mode == SM_PRIVATE) || (recurse_info.share_mode == SM_COW)) &&
++                            recurse_info.pages_swapped_out > 0)
++                        swapped_pages += recurse_info.pages_swapped_out;
++                    address += size;
++                }
++            }
++        }
++        else
++            ERR("Failed to get page size %#x.\n", result);
++
++        if (swapped_pages)
++            pvmi->PagefileUsage += (swapped_pages * mac_host_page_size);
++        else
++            pvmi->PagefileUsage += info.compressed;
+     }
+ #endif
+ }
+-- 
+GitLab
+
+
+From 74efcc28aea483a998437e5270235de32cc03032 Mon Sep 17 00:00:00 2001
+From: Jactry Zeng <jzeng@codeweavers.com>
+Date: Thu, 1 Jan 2026 12:00:01 -0600
+Subject: [PATCH 2/2] ntdll/tests: Test PagefileUsage with a large memory
+ reservation.
+
+This is to prove that the previous PagefileUsage implementation for
+macOS (PagefileUsage = mach_task_basic_info.virtual_size) is wrong.
+Some Windows applications query PagefileUsage to determine how much
+memory the application is using. Returning an oversized number will
+cause the application to think that memory is out of space.
+---
+ dlls/ntdll/tests/info.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/tests/info.c b/dlls/ntdll/tests/info.c
+index 3d4c7d956f8..bcf2b8f3acd 100644
+--- a/dlls/ntdll/tests/info.c
++++ b/dlls/ntdll/tests/info.c
+@@ -1905,7 +1905,7 @@ static void test_query_process_vm(void)
+     ULONG ReturnLength;
+     VM_COUNTERS_EX pvi;
+     HANDLE process;
+-    SIZE_T prev_size;
++    SIZE_T prev_size, reserve_size;
+     const SIZE_T alloc_size = 16 * 1024 * 1024;
+     void *ptr;
+ 
+@@ -2002,6 +2002,17 @@ static void test_query_process_vm(void)
+     ok( pvi.VirtualSize == prev_size,
+         "Expected to equal to %Iu, got %Iu\n", prev_size, pvi.VirtualSize);
+     VirtualFree( ptr, 0, MEM_RELEASE);
++
++    /* Reserving memory shouldn't significantly increase PageFileUsage. */
++    status = NtQueryInformationProcess(GetCurrentProcess(), ProcessVmCounters, &pvi, sizeof(pvi), NULL);
++    ok(status == STATUS_SUCCESS, "Got %#lx.\n", status);
++    reserve_size = pvi.PagefileUsage * 2;
++    ptr = VirtualAlloc(NULL, reserve_size, MEM_RESERVE, PAGE_READWRITE);
++    ok(!!ptr, "VirtualAlloc failed: %#lx.\n", GetLastError());
++    status = NtQueryInformationProcess(GetCurrentProcess(), ProcessVmCounters, &pvi, sizeof(pvi), NULL);
++    ok(status == STATUS_SUCCESS, "Got %#lx.\n", status);
++    ok(pvi.PagefileUsage < reserve_size, "Wrong value %Iu/%Iu.\n", pvi.PagefileUsage, reserve_size );
++    VirtualFree(ptr, 0, MEM_RELEASE);
+ }
+ 
+ static void test_query_process_io(void)
+-- 
+GitLab
+

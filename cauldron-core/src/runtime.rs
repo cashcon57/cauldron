@@ -102,70 +102,177 @@ impl RuntimeInstaller {
 
         match runtime.runtime_type {
             RuntimeType::Dxvk => {
-                let dlls = ["d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"];
+                // DXVK translates D3D9/10/11 to Vulkan.
+                // Install as Wine builtins so they work for Steam-launched games.
+                let all_dlls = ["d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"];
                 let x64_dir = runtime.path.join("x64");
                 let x32_dir = runtime.path.join("x32");
 
-                for dll in &dlls {
-                    copy_dll(&x64_dir, &system32, dll)?;
-                }
+                let home = std::env::var("HOME").unwrap_or_default();
+                let wine_pe = PathBuf::from(&home).join("Library/Cauldron/wine/lib/wine/x86_64-windows");
 
-                if has_wow64 && x32_dir.exists() {
-                    for dll in &dlls {
-                        copy_dll(&x32_dir, &syswow64, dll)?;
+                let mut installed_dlls = Vec::new();
+                for dll in &all_dlls {
+                    if x64_dir.join(dll).exists() {
+                        // Install to Wine builtins (backup original)
+                        if wine_pe.exists() {
+                            let dest = wine_pe.join(dll);
+                            let backup = wine_pe.join(format!("{}.wine-orig", dll));
+                            if dest.exists() && !backup.exists() {
+                                let _ = fs::copy(&dest, &backup);
+                            }
+                            fs::copy(&x64_dir.join(dll), &dest)?;
+                        }
+                        // Also install to system32
+                        copy_dll(&x64_dir, &system32, dll)?;
+                        installed_dlls.push(*dll);
                     }
                 }
 
-                Self::write_dll_overrides(bottle_path, &dlls, "native")?;
-            }
-            RuntimeType::Dxmt => {
-                // DXMT does not handle DX9.
-                let dlls = ["d3d10core.dll", "d3d11.dll", "dxgi.dll"];
-                let x64_dir = runtime.path.join("x64");
-
-                for dll in &dlls {
-                    copy_dll(&x64_dir, &system32, dll)?;
+                if has_wow64 && x32_dir.exists() {
+                    for dll in &all_dlls {
+                        if x32_dir.join(dll).exists() {
+                            copy_dll(&x32_dir, &syswow64, dll)?;
+                        }
+                    }
                 }
 
-                // DXMT is Metal-native; typically no 32-bit path.
+                let dll_refs: Vec<&str> = installed_dlls.iter().copied().collect();
+                Self::write_dll_overrides(bottle_path, &dll_refs, "native")?;
+            }
+            RuntimeType::Dxmt => {
+                // DXMT requires both PE DLLs and a Unix .so bridge.
+                // Install as Wine builtins (replace in lib/wine/) so they work
+                // for ALL processes including games launched via Steam -applaunch.
+                let x64_win_dir = if runtime.path.join("x86_64-windows").exists() {
+                    runtime.path.join("x86_64-windows")
+                } else {
+                    runtime.path.join("x64")
+                };
+                let x64_unix_dir = runtime.path.join("x86_64-unix");
+
+                // Find Wine's install directories
+                let home = std::env::var("HOME").unwrap_or_default();
+                let wine_pe = PathBuf::from(&home).join("Library/Cauldron/wine/lib/wine/x86_64-windows");
+                let wine_unix = PathBuf::from(&home).join("Library/Cauldron/wine/lib/wine/x86_64-unix");
+
+                // PE DLLs: d3d11, d3d10core, dxgi, winemetal
+                let pe_dlls = ["d3d11.dll", "d3d10core.dll", "dxgi.dll", "winemetal.dll"];
+                for dll in &pe_dlls {
+                    let src = x64_win_dir.join(dll);
+                    if src.exists() {
+                        // Install to Wine's builtin dir (backup original)
+                        if wine_pe.exists() {
+                            let dest = wine_pe.join(dll);
+                            let backup = wine_pe.join(format!("{}.wine-orig", dll));
+                            if dest.exists() && !backup.exists() {
+                                let _ = fs::copy(&dest, &backup);
+                            }
+                            fs::copy(&src, &dest)?;
+                            tracing::info!("Installed DXMT {} to Wine builtins", dll);
+                        }
+                        // Also install to system32 for good measure
+                        copy_dll(&x64_win_dir, &system32, dll)?;
+                    }
+                }
+
+                // Unix bridge: winemetal.so (the actual Metal rendering engine)
+                let winemetal_so = x64_unix_dir.join("winemetal.so");
+                if winemetal_so.exists() && wine_unix.exists() {
+                    fs::copy(&winemetal_so, wine_unix.join("winemetal.so"))?;
+                    tracing::info!("Installed DXMT winemetal.so to Wine unix dir");
+                }
+
+                let dlls = ["d3d10core.dll", "d3d11.dll", "dxgi.dll"];
                 Self::write_dll_overrides(bottle_path, &dlls, "native")?;
             }
             RuntimeType::MoltenVK => {
-                let src = runtime.path.join("libMoltenVK.dylib");
-                if !src.exists() {
-                    return Err(RuntimeError::MissingDll(format!(
+                // MoltenVK layout varies: direct, or MoltenVK/MoltenVK/dylib/macOS/
+                let candidates = [
+                    runtime.path.join("libMoltenVK.dylib"),
+                    runtime.path.join("MoltenVK/MoltenVK/dylib/macOS/libMoltenVK.dylib"),
+                    runtime.path.join("MoltenVK/dylib/macOS/libMoltenVK.dylib"),
+                    runtime.path.join("dylib/macOS/libMoltenVK.dylib"),
+                ];
+                let src = candidates.iter().find(|p| p.exists())
+                    .ok_or_else(|| RuntimeError::MissingDll(format!(
                         "libMoltenVK.dylib not found in {}",
                         runtime.path.display()
-                    )));
-                }
+                    )))?;
 
-                // MoltenVK goes into the bottle's lib directory so the Vulkan
-                // loader can find it at runtime.
                 let lib_dir = bottle_path.join("lib");
                 fs::create_dir_all(&lib_dir)?;
                 let dest = lib_dir.join("libMoltenVK.dylib");
-                fs::copy(&src, &dest)?;
+                fs::copy(src, &dest)?;
                 tracing::debug!("Copied libMoltenVK.dylib -> {}", dest.display());
 
                 // No DLL overrides needed; MoltenVK is a Vulkan ICD, not a
                 // Windows DLL.
             }
             RuntimeType::D3DMetal => {
-                // D3DMetal ships d3d11.dll and dxgi.dll (plus libd3dshared.dylib).
-                let dlls = ["d3d11.dll", "dxgi.dll"];
+                // D3DMetal requires PE DLLs, Unix .so bridges, and the framework.
+                // D3DMetal operates via DLL overrides — .so files dlopen D3DMetal.framework.
+                let pe_dlls = ["d3d11.dll", "d3d12.dll", "d3d12core.dll", "dxgi.dll"];
+                let unix_sos = ["d3d11.so", "d3d12.so", "dxgi.so"];
 
-                for dll in &dlls {
-                    copy_dll(&runtime.path, &system32, dll)?;
+                let home = std::env::var("HOME").unwrap_or_default();
+                let wine_pe = PathBuf::from(&home).join("Library/Cauldron/wine/lib/wine/x86_64-windows");
+                let wine_unix = PathBuf::from(&home).join("Library/Cauldron/wine/lib/wine/x86_64-unix");
+
+                // Look for DLLs in wine/ subdirectory of D3DMetal distribution
+                let d3d_wine_dir = runtime.path.parent()
+                    .and_then(|p| p.parent())
+                    .map(|base| base.join("wine"));
+
+                if let Some(ref wine_dir) = d3d_wine_dir {
+                    let pe_dir = wine_dir.join("x86_64-windows");
+                    let unix_dir = wine_dir.join("x86_64-unix");
+
+                    // Install PE DLLs as Wine builtins
+                    for dll in &pe_dlls {
+                        let src = pe_dir.join(dll);
+                        if src.exists() {
+                            if wine_pe.exists() {
+                                let dest = wine_pe.join(dll);
+                                let backup = wine_pe.join(format!("{}.wine-orig", dll));
+                                if dest.exists() && !backup.exists() {
+                                    let _ = fs::copy(&dest, &backup);
+                                }
+                                let _ = fs::copy(&src, &dest);
+                            }
+                            copy_dll(&pe_dir, &system32, dll)?;
+                        }
+                    }
+
+                    // Install Unix .so bridges
+                    for so in &unix_sos {
+                        let src = unix_dir.join(so);
+                        if src.exists() && wine_unix.exists() {
+                            let dest = wine_unix.join(so);
+                            let backup = wine_unix.join(format!("{}.wine-orig", so));
+                            if dest.exists() && !backup.exists() {
+                                let _ = fs::copy(&dest, &backup);
+                            }
+                            fs::copy(&src, &dest)?;
+                        }
+                    }
                 }
 
-                // Copy the shared dylib if present.
-                let shared_lib = runtime.path.join("libd3dshared.dylib");
-                if shared_lib.exists() {
+                // Copy libd3dshared.dylib if present
+                let shared_lib = runtime.path.join("libd3dshared.dylib")
+                    .exists()
+                    .then(|| runtime.path.join("libd3dshared.dylib"))
+                    .or_else(|| d3d_wine_dir.as_ref().map(|d| d.join("libd3dshared.dylib")).filter(|p| p.exists()));
+                if let Some(shared) = shared_lib {
+                    if wine_unix.exists() {
+                        fs::copy(&shared, wine_unix.join("libd3dshared.dylib"))?;
+                    }
                     let lib_dir = bottle_path.join("lib");
                     fs::create_dir_all(&lib_dir)?;
-                    fs::copy(&shared_lib, lib_dir.join("libd3dshared.dylib"))?;
+                    fs::copy(&shared, lib_dir.join("libd3dshared.dylib"))?;
                 }
 
+                let dlls = ["d3d11.dll", "dxgi.dll"];
                 Self::write_dll_overrides(bottle_path, &dlls, "native")?;
             }
         }
@@ -195,11 +302,15 @@ impl RuntimeInstaller {
                 remove_dlls(&system32, &dlls);
                 remove_dlls(&syswow64, &dlls);
                 Self::remove_dll_overrides(bottle_path, &dlls)?;
+                restore_wine_builtins(&dlls);
             }
             RuntimeType::Dxmt => {
                 let dlls = ["d3d10core.dll", "d3d11.dll", "dxgi.dll"];
                 remove_dlls(&system32, &dlls);
                 Self::remove_dll_overrides(bottle_path, &dlls)?;
+                // Restore Wine's original builtins
+                restore_wine_builtins(&["d3d11.dll", "d3d10core.dll", "dxgi.dll", "winemetal.dll"]);
+                restore_wine_unix_builtins(&["winemetal.so"]);
             }
             RuntimeType::MoltenVK => {
                 let mvk = bottle_path.join("lib/libMoltenVK.dylib");
@@ -216,6 +327,8 @@ impl RuntimeInstaller {
                     fs::remove_file(&shared)?;
                 }
                 Self::remove_dll_overrides(bottle_path, &dlls)?;
+                restore_wine_builtins(&["d3d11.dll", "d3d12.dll", "d3d12core.dll", "dxgi.dll"]);
+                restore_wine_unix_builtins(&["d3d11.so", "d3d12.so", "dxgi.so"]);
             }
         }
 
@@ -394,6 +507,192 @@ impl RuntimeInstaller {
 
         Ok(())
     }
+
+    /// Switch a bottle's graphics backend by uninstalling the old DLLs and
+    /// installing the new ones. Handles registry overrides automatically.
+    ///
+    /// `new_backend` is a `GraphicsBackend` enum value. If `Auto`, restores
+    /// Wine's built-in DLLs (removes all overrides).
+    pub fn switch_backend(
+        &self,
+        bottle_path: &Path,
+        new_backend: cauldron_db::GraphicsBackend,
+    ) -> Result<String, RuntimeError> {
+        use cauldron_db::GraphicsBackend;
+
+        // First, uninstall whatever is currently in the bottle
+        let current = Self::list_installed(bottle_path);
+        for rt in &current {
+            if let Err(e) = self.uninstall_from_bottle(*rt, bottle_path) {
+                tracing::warn!("Failed to uninstall {}: {}", rt, e);
+            }
+        }
+
+        // Map GraphicsBackend to RuntimeType + find the runtime on disk
+        let target_type = match new_backend {
+            GraphicsBackend::DXMT => Some(RuntimeType::Dxmt),
+            GraphicsBackend::DxvkMoltenVK | GraphicsBackend::DxvkKosmicKrisp => Some(RuntimeType::Dxvk),
+            GraphicsBackend::D3DMetal => Some(RuntimeType::D3DMetal),
+            GraphicsBackend::Vkd3dProton => None, // VKD3D is separate
+            GraphicsBackend::Auto => None, // Use Wine builtins
+        };
+
+        if let Some(rt_type) = target_type {
+            // Find the runtime on disk, or auto-download it
+            let runtime = match self.find_runtime(rt_type) {
+                Some(rt) => rt,
+                None => {
+                    // Auto-download the runtime
+                    tracing::info!("Runtime {} not found locally, downloading...", rt_type);
+                    let downloader = crate::runtime_downloader::RuntimeDownloader::new(
+                        self.runtimes_dir.parent().unwrap_or(&self.runtimes_dir).to_path_buf()
+                    );
+                    let component = match rt_type {
+                        RuntimeType::Dxvk => crate::runtime_downloader::RuntimeComponent::Dxvk,
+                        RuntimeType::Dxmt => crate::runtime_downloader::RuntimeComponent::Dxmt,
+                        RuntimeType::MoltenVK => crate::runtime_downloader::RuntimeComponent::MoltenVK,
+                        RuntimeType::D3DMetal => crate::runtime_downloader::RuntimeComponent::D3DMetal,
+                    };
+                    // Find the latest version for this component
+                    let releases = downloader.available_releases();
+                    let release = releases.iter().find(|r| r.component == component);
+                    if let Some(rel) = release {
+                        match downloader.download(component, &rel.version) {
+                            Ok(_path) => {
+                                tracing::info!("Downloaded {} {}", component, rel.version);
+                            }
+                            Err(e) => {
+                                return Err(RuntimeError::NotFound(format!(
+                                    "Failed to download {}: {}", rt_type, e
+                                )));
+                            }
+                        }
+                    } else {
+                        return Err(RuntimeError::NotFound(format!(
+                            "No download URL configured for {}", rt_type
+                        )));
+                    }
+
+                    // Now it should be on disk
+                    self.find_runtime(rt_type).ok_or_else(|| {
+                        RuntimeError::NotFound(format!(
+                            "{} downloaded but not found on disk", rt_type
+                        ))
+                    })?
+                }
+            };
+
+            self.install_to_bottle(&runtime, bottle_path)?;
+
+            // For DXVK, also download+install MoltenVK if not present
+            if rt_type == RuntimeType::Dxvk {
+                if self.find_runtime(RuntimeType::MoltenVK).is_none() {
+                    tracing::info!("Auto-downloading MoltenVK for DXVK...");
+                    let downloader = crate::runtime_downloader::RuntimeDownloader::new(
+                        self.runtimes_dir.parent().unwrap_or(&self.runtimes_dir).to_path_buf()
+                    );
+                    let releases = downloader.available_releases();
+                    if let Some(rel) = releases.iter().find(|r| r.component == crate::runtime_downloader::RuntimeComponent::MoltenVK) {
+                        let _ = downloader.download(crate::runtime_downloader::RuntimeComponent::MoltenVK, &rel.version);
+                    }
+                }
+                if let Some(mvk) = self.find_runtime(RuntimeType::MoltenVK) {
+                    let _ = self.install_to_bottle(&mvk, bottle_path);
+                }
+            }
+
+            return Ok(format!("{} installed", rt_type));
+        }
+
+        // Auto or no matching runtime — clean state, Wine builtins
+        Ok("Using Wine built-in graphics (WineD3D)".to_string())
+    }
+
+    /// Find the best available runtime of a given type.
+    /// Checks bundled runtimes in deps/runtimes/ first, then downloaded runtimes.
+    fn find_runtime(&self, rt_type: RuntimeType) -> Option<RuntimeVersion> {
+        let type_dir = match rt_type {
+            RuntimeType::Dxvk => "dxvk",
+            RuntimeType::Dxmt => "dxmt",
+            RuntimeType::MoltenVK => "moltenvk",
+            RuntimeType::D3DMetal => "d3dmetal",
+        };
+
+        // 1. Check bundled runtimes (shipped with the app)
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+
+        let mut bundled_paths = vec![
+            // Relative to working dir (dev builds)
+            PathBuf::from("deps/runtimes").join(type_dir),
+            // Relative to base_dir (App Support)
+            self.runtimes_dir.parent().unwrap_or(&self.runtimes_dir)
+                .join("deps/runtimes").join(type_dir),
+            // Hardcoded project path (dev builds)
+            PathBuf::from("/Users/cashconway/cauldron/deps/runtimes").join(type_dir),
+        ];
+        // Relative to the executable (release app bundle)
+        if let Some(ref exe) = exe_dir {
+            bundled_paths.push(exe.join("../Resources/runtimes").join(type_dir));
+            bundled_paths.push(exe.join("../../deps/runtimes").join(type_dir));
+        }
+
+        for bundled in &bundled_paths {
+            if bundled.exists() {
+                // Bundled runtimes have DLLs directly (e.g., deps/runtimes/dxvk/x64/)
+                // or in a versioned subdir
+                if bundled.join("x64").exists() || bundled.join("x86_64-windows").exists() {
+                    return Some(RuntimeVersion {
+                        name: format!("{}-bundled", type_dir),
+                        runtime_type: rt_type,
+                        version: "bundled".to_string(),
+                        path: bundled.clone(),
+                        installed: false,
+                    });
+                }
+                // Check for versioned subdirs
+                if let Ok(entries) = fs::read_dir(bundled) {
+                    let mut versions: Vec<_> = entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_dir())
+                        .collect();
+                    versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+                    if let Some(entry) = versions.first() {
+                        return Some(RuntimeVersion {
+                            name: format!("{}-{}", type_dir, entry.file_name().to_string_lossy()),
+                            runtime_type: rt_type,
+                            version: entry.file_name().to_string_lossy().to_string(),
+                            path: entry.path(),
+                            installed: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        // 2. Check downloaded runtimes
+        let dir = self.runtimes_dir.join(type_dir);
+        if dir.exists() {
+            let mut versions: Vec<_> = fs::read_dir(&dir)
+                .ok()?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .collect();
+            versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+            if let Some(entry) = versions.first() {
+                return Some(RuntimeVersion {
+                    name: format!("{}-{}", type_dir, entry.file_name().to_string_lossy()),
+                    runtime_type: rt_type,
+                    version: entry.file_name().to_string_lossy().to_string(),
+                    path: entry.path(),
+                    installed: false,
+                });
+            }
+        }
+
+        None
+    }
 }
 
 /// Copy a single DLL from `src_dir` to `dest_dir`, returning an error if the
@@ -411,6 +710,46 @@ fn copy_dll(src_dir: &Path, dest_dir: &Path, dll_name: &str) -> Result<(), Runti
     fs::copy(&src, &dest)?;
     tracing::debug!("Copied {} -> {}", src.display(), dest.display());
     Ok(())
+}
+
+/// Restore Wine's original PE builtins from `.wine-orig` backups.
+fn restore_wine_builtins(dlls: &[&str]) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let wine_pe = PathBuf::from(&home).join("Library/Cauldron/wine/lib/wine/x86_64-windows");
+    for dll in dlls {
+        let backup = wine_pe.join(format!("{}.wine-orig", dll));
+        let target = wine_pe.join(dll);
+        if backup.exists() {
+            if let Err(e) = fs::copy(&backup, &target) {
+                tracing::warn!("Failed to restore {}: {e}", dll);
+            } else {
+                let _ = fs::remove_file(&backup);
+                tracing::info!("Restored Wine builtin {}", dll);
+            }
+        }
+    }
+}
+
+/// Restore Wine's original Unix .so builtins from `.wine-orig` backups.
+fn restore_wine_unix_builtins(sos: &[&str]) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let wine_unix = PathBuf::from(&home).join("Library/Cauldron/wine/lib/wine/x86_64-unix");
+    for so in sos {
+        let backup = wine_unix.join(format!("{}.wine-orig", so));
+        let target = wine_unix.join(so);
+        if backup.exists() {
+            if let Err(e) = fs::copy(&backup, &target) {
+                tracing::warn!("Failed to restore {}: {e}", so);
+            } else {
+                let _ = fs::remove_file(&backup);
+                tracing::info!("Restored Wine unix builtin {}", so);
+            }
+        } else if target.exists() {
+            // No backup means this .so was added by us, not a replacement — remove it
+            let _ = fs::remove_file(&target);
+            tracing::info!("Removed added {}", so);
+        }
+    }
 }
 
 /// Silently remove DLLs from a directory (best-effort).

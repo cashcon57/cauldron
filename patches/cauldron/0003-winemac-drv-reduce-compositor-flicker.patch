@@ -1,0 +1,68 @@
+From 1fa6bfe7d39a9f12b05c7526d353b060004b8183 Mon Sep 17 00:00:00 2001
+From: Cauldron <cauldron@cauldron.app>
+Date: Mon, 6 Apr 2026 23:25:54 -0500
+Subject: [PATCH] winemac.drv: Reduce compositor flicker via atomic
+ CATransaction and animation suppression.
+
+Wraps CALayer content updates in CATransaction for atomic compositor
+presentation, suppresses implicit Core Animation interpolation on Wine
+content layers, and disables window animation behavior.
+
+This fixes the full-screen flickering that affects every game on macOS Wine,
+regardless of graphics backend (DXMT, DXVK, D3DMetal) or window mode.
+
+Based on wine-staging winemac.drv-no-flicker-patch, rebased to Wine 11.6.
+---
+ dlls/winemac.drv/cocoa_window.m | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
+index 7d6d704..6a05a86 100644
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -487,6 +487,14 @@ - (instancetype) initWithFrame:(NSRect)frame
+             [self setWantsLayer:YES];
+             [self setLayerRetinaProperties:retina_on];
+             [self setAutoresizesSubviews:NO];
++
++            /* Cauldron: Suppress implicit CALayer animations to prevent
++             * Core Animation from interpolating between game frames. */
++            self.layer.actions = @{
++                @"contents": [NSNull null],
++                @"bounds":   [NSNull null],
++                @"position": [NSNull null],
++            };
+         }
+         return self;
+     }
+@@ -537,8 +545,18 @@ - (void) updateLayer
+ 
+         if (image)
+         {
++            /* Cauldron: Atomic frame presentation via CATransaction.
++             * Without this, the macOS compositor can read CALayer.contents
++             * mid-update, causing visible flickering in every game. */
++            [CATransaction begin];
++            [CATransaction setDisableActions:YES];
++            [CATransaction setAnimationDuration:0];
++
+             layer.position = surfaceRect.origin;
+             layer.contents = (id)image;
++
++            [CATransaction commit];
++
+             CFRelease(image);
+             [window windowDidDrawContent];
+ 
+@@ -1089,6 +1107,8 @@ + (WineWindow*) createWindowWithFeatures:(const struct macdrv_window_features*)w
+ 
+         [window setFrameAndWineFrame:[window frameRectForContentRect:window_frame]];
+ 
++        /* Cauldron: Prevent window server frame interpolation. */
++        [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
+         return window;
+     }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

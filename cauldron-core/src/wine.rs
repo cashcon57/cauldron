@@ -2,6 +2,7 @@ use crate::bottle::Bottle;
 use crate::graphics::{build_env_vars, GraphicsConfig};
 use crate::log_capture::LogCapture;
 use crate::performance::PerfMonitor;
+use crate::rosettax87;
 use crate::shader_cache::ShaderCacheManager;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -39,6 +40,9 @@ pub struct WineRunner {
     /// Optional log capture. When set, Wine/DXVK log redirection
     /// environment variables are injected during launch.
     pub log_capture: Option<LogCapture>,
+    /// When true, inject ROSETTA_X87_PATH for faster x87 FP operations
+    /// via the RosettaX87 patched Rosetta runtime.
+    pub rosettax87_enabled: bool,
 }
 
 impl WineRunner {
@@ -49,6 +53,7 @@ impl WineRunner {
             cache_dir: None,
             perf_monitor: None,
             log_capture: None,
+            rosettax87_enabled: false,
         }
     }
 
@@ -59,6 +64,7 @@ impl WineRunner {
             cache_dir: Some(cache_dir),
             perf_monitor: None,
             log_capture: None,
+            rosettax87_enabled: false,
         }
     }
 
@@ -97,6 +103,8 @@ impl WineRunner {
             backend: bottle.graphics_backend,
             dxvk_async: true,
             metalfx_spatial: false,
+            metalfx_upscale_factor: 2.0,
+            dlss_metalfx: false,
             metal_hud: false,
             dxr_enabled: false,
             mvk_argument_buffers: true,
@@ -122,6 +130,12 @@ impl WineRunner {
         if let Some(ref log_cap) = self.log_capture {
             let log_env = log_cap.setup_log_env();
             env_vars.extend(log_env);
+        }
+
+        // RosettaX87 — faster x87 FP via patched Rosetta
+        if self.rosettax87_enabled {
+            let rx87_env = rosettax87::build_rosettax87_env(true);
+            env_vars.extend(rx87_env);
         }
 
         // User-specified overrides from the bottle
