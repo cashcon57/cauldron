@@ -186,6 +186,14 @@ pub fn run_migrations(conn: &Connection) -> Result<(), SchemaError> {
         );"
     )?;
 
+    // Performance indexes for frequently queried columns
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_compat_reports_game_id ON compatibility_reports(game_id);
+         CREATE INDEX IF NOT EXISTS idx_patch_log_commit_hash ON patch_log(commit_hash);
+         CREATE INDEX IF NOT EXISTS idx_proton_commits_classification ON proton_commits(classification);
+         CREATE INDEX IF NOT EXISTS idx_game_deps_steam_app ON game_deps_installed(steam_app_id);"
+    );
+
     tracing::info!("Migrations complete");
     Ok(())
 }

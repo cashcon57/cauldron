@@ -538,7 +538,7 @@ impl BottleDiscovery {
             },
             wine_version: bottle.wine_version.clone(),
             graphics_backend: gfx_backend,
-            created_at: crate::bottle::chrono_like_timestamp(),
+            created_at: chrono::Utc::now().to_rfc3339(),
             env_overrides: HashMap::new(),
         };
 
