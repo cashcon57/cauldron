@@ -12,7 +12,7 @@ struct ContentView: View {
     @State private var showingSteamInstaller = false
     @State private var showingDiscoveredBottles = false
     @State private var wineRunning = false
-    @State private var wineCheckTimer: Timer? = nil
+    @State private var wineCheckTask: Task<Void, Never>? = nil
 
     var body: some View {
         @Bindable var vm = viewModel
@@ -159,12 +159,15 @@ struct ContentView: View {
             if let first = viewModel.bottles.first {
                 selectedItem = .bottle(first)
             }
-            checkWineRunning()
-            wineCheckTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
-                Task { @MainActor in checkWineRunning() }
+            // Use a cancellable Task instead of Timer to avoid leaks and main thread blocking
+            wineCheckTask = Task {
+                while !Task.isCancelled {
+                    await checkWineRunning()
+                    try? await Task.sleep(for: .seconds(3))
+                }
             }
         }
-        .onDisappear { wineCheckTimer?.invalidate() }
+        .onDisappear { wineCheckTask?.cancel() }
         .onChange(of: viewModel.bottles) { _, newBottles in
             // If current selection is a deleted bottle, clear it
             if case .bottle(let b) = selectedItem, !newBottles.contains(where: { $0.id == b.id }) {
@@ -177,19 +180,23 @@ struct ContentView: View {
         }
     }
 
-    private func checkWineRunning() {
-        let ps = Process()
-        ps.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        ps.arguments = ["-f", "wineserver"]
-        ps.standardOutput = FileHandle.nullDevice
-        ps.standardError = FileHandle.nullDevice
-        do {
-            try ps.run()
-            ps.waitUntilExit()
-            wineRunning = ps.terminationStatus == 0
-        } catch {
-            wineRunning = false
-        }
+    private func checkWineRunning() async {
+        // Run pgrep off the main thread to avoid blocking UI
+        let running = await Task.detached {
+            let ps = Process()
+            ps.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+            ps.arguments = ["-f", "wineserver"]
+            ps.standardOutput = FileHandle.nullDevice
+            ps.standardError = FileHandle.nullDevice
+            do {
+                try ps.run()
+                ps.waitUntilExit()
+                return ps.terminationStatus == 0
+            } catch {
+                return false
+            }
+        }.value
+        await MainActor.run { wineRunning = running }
     }
 
     private func launchSteam(bottle: Bottle) {

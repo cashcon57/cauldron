@@ -23,16 +23,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 struct CauldronApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var licenseManager = LicenseManager()
+    @State private var bottleListViewModel: BottleListViewModel
     private let bridge: CauldronBridge
 
     init() {
         bridge = CauldronBridge.shared
+        // Store the ViewModel as @State so it persists across body re-evaluations
+        _bottleListViewModel = State(initialValue: BottleListViewModel(bridge: CauldronBridge.shared))
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environment(BottleListViewModel(bridge: bridge))
+                .environment(bottleListViewModel)
                 .environment(licenseManager)
                 .sheet(isPresented: showActivationSheet) {
                     ActivationView()
