@@ -155,23 +155,41 @@ fn determine_classification(
     message: &str,
     diff: &str,
 ) -> (Classification, Transferability) {
-    // Check files for classification patterns (regexes compiled once via LazyLock)
+    // Check ALL files and collect classifications, then pick the most important.
+    // Priority order: SteamIntegration > WineApiFix > DxvkFix > Vkd3dFix > BuildSystem
+    let mut best = None::<(Classification, Transferability)>;
+    let priority = |c: &Classification| -> u8 {
+        match c {
+            Classification::SteamIntegration => 5,
+            Classification::WineApiFix => 4,
+            Classification::DxvkFix => 3,
+            Classification::Vkd3dFix => 2,
+            Classification::BuildSystem => 1,
+            _ => 0,
+        }
+    };
     for file in files {
-        if WINE_API_RE.is_match(file) {
-            return (Classification::WineApiFix, Transferability::High);
+        let candidate = if STEAM_RE.is_match(file) {
+            Some((Classification::SteamIntegration, Transferability::Low))
+        } else if WINE_API_RE.is_match(file) {
+            Some((Classification::WineApiFix, Transferability::High))
+        } else if DXVK_RE.is_match(file) {
+            Some((Classification::DxvkFix, Transferability::High))
+        } else if VKD3D_RE.is_match(file) {
+            Some((Classification::Vkd3dFix, Transferability::Medium))
+        } else if BUILD_RE.is_match(file) {
+            Some((Classification::BuildSystem, Transferability::None))
+        } else {
+            None
+        };
+        if let Some(c) = candidate {
+            if best.as_ref().map_or(true, |b| priority(&c.0) > priority(&b.0)) {
+                best = Some(c);
+            }
         }
-        if DXVK_RE.is_match(file) {
-            return (Classification::DxvkFix, Transferability::High);
-        }
-        if VKD3D_RE.is_match(file) {
-            return (Classification::Vkd3dFix, Transferability::Medium);
-        }
-        if STEAM_RE.is_match(file) {
-            return (Classification::SteamIntegration, Transferability::Low);
-        }
-        if BUILD_RE.is_match(file) {
-            return (Classification::BuildSystem, Transferability::None);
-        }
+    }
+    if let Some(b) = best {
+        return b;
     }
 
     // Check for submodule/dependency updates by message patterns

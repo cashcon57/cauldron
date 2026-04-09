@@ -180,9 +180,16 @@ char *cauldron_list_dependencies(void *_mgr);
 
 char *cauldron_install_dependency(void *_mgr, const char *_bid, const char *_dep);
 
-char *cauldron_is_bottle_running(void *_mgr, const char *_bid);
+/**
+ * Returns 1 if bottle is running, 0 if not, -1 on error.
+ * STUB: always returns 0 (not running) — needs proper process tracking.
+ */
+int32_t cauldron_is_bottle_running(void *_mgr, const char *_bid);
 
-char *cauldron_kill_bottle(void *_mgr, const char *_bid);
+/**
+ * Kill Wine processes for a bottle. Returns 0 on success, -1 on failure.
+ */
+int32_t cauldron_kill_bottle(void *_mgr, const char *_bid);
 
 /**
  * Switch a bottle's graphics backend (stub — backend switching now handled via env vars at launch).
