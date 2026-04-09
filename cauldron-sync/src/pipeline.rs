@@ -117,8 +117,17 @@ impl SyncPipeline {
         let start = Instant::now();
         let mut errors = Vec::new();
 
-        // 1. Poll for new commits
-        let raw_commits = self.monitor.poll_once().await?;
+        // 1. Poll for new commits (pass last-seen hash to avoid replaying old ones)
+        let last_hash = {
+            let conn = cauldron_db::init_db(&self.db_path)?;
+            cauldron_db::sync_status::get_sync_status(&conn)
+                .ok()
+                .flatten()
+                .and_then(|s| {
+                    if s.last_commit_hash.is_empty() { None } else { Some(s.last_commit_hash) }
+                })
+        };
+        let raw_commits = self.monitor.poll_once(last_hash.as_deref()).await?;
         let total_commits = raw_commits.len();
         tracing::info!(total_commits = total_commits, "Polled commits from repository");
 

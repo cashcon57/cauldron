@@ -41,7 +41,8 @@ impl ProtonMonitor {
     }
 
     /// Poll the remote repository once and return any new commits.
-    pub async fn poll_once(&self) -> Result<Vec<RawCommit>, MonitorError> {
+    /// If `last_seen_hash` is provided, only returns commits newer than that hash.
+    pub async fn poll_once(&self, last_seen_hash: Option<&str>) -> Result<Vec<RawCommit>, MonitorError> {
         tracing::info!(
             "Polling Proton repo at {} from {}",
             self.repo_path.display(),
@@ -77,6 +78,13 @@ impl ProtonMonitor {
         let mut revwalk = repo.revwalk()?;
         revwalk.push(fetch_oid)?;
         revwalk.set_sorting(git2::Sort::TIME)?;
+
+        // Stop walking at the last-seen commit to avoid replaying old commits
+        if let Some(hash) = last_seen_hash {
+            if let Ok(oid) = git2::Oid::from_str(hash) {
+                let _ = revwalk.hide(oid); // ignore error if oid not in repo
+            }
+        }
 
         // Collect up to 100 recent commits
         let mut commits = Vec::new();

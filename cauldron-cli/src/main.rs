@@ -703,7 +703,7 @@ async fn handle_sync(action: SyncAction) -> Result<()> {
 
             println!("Polling Proton repository...");
             let raw_commits = monitor
-                .poll_once()
+                .poll_once(None)
                 .await
                 .context("Failed to poll Proton repository")?;
 
