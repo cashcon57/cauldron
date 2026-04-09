@@ -217,33 +217,22 @@ INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, required_depende
 -- ============================================================================
 
 -- New game entries for D3DMetal DXR titles
-INSERT OR REPLACE INTO games (steam_app_id, title, backend, compat_status, known_issues, notes, popularity_rank, dx_version, genre) VALUES
-(2215430, 'Ghost of Tsushima', 'D3DMetal', 'Silver', 'Frame pacing issues; DXR on M3+ only', 'DX12. D3DMetal required.', 111, 12, 'Action'),
-(2118960, 'Alan Wake 2', 'D3DMetal', 'Silver', 'Very GPU-heavy; DXR on M3+ only', 'DX12. D3DMetal required. Epic primary.', 112, 12, 'Horror'),
-(1895880, 'Ratchet & Clank: Rift Apart', 'D3DMetal', 'Silver', 'Frame drops during dimension shifts', 'DX12. MetalFX recommended for DLSS replacement.', 113, 12, 'Action'),
-(1888930, 'The Last of Us Part I', 'D3DMetal', 'Silver', 'CPU-bound in open areas; shader stutter', 'DX12. D3DMetal required.', 114, 12, 'Action'),
-(1649240, 'Returnal', 'D3DMetal', 'Silver', 'UE5 demanding; DXR on M3+', 'DX12. D3DMetal required.', 115, 12, 'Action');
+-- Schema: games (steam_app_id, exe_hash, title, backend, compat_status, wine_overrides, known_issues, last_tested, notes)
+INSERT OR REPLACE INTO games (steam_app_id, title, backend, compat_status, known_issues, notes) VALUES
+(2215430, 'Ghost of Tsushima', 'D3DMetal', 'Silver', 'Frame pacing issues; DXR on M3+ only', 'DX12. D3DMetal required.'),
+(2118960, 'Alan Wake 2', 'D3DMetal', 'Silver', 'Very GPU-heavy; DXR on M3+ only', 'DX12. D3DMetal required. Epic primary.'),
+(1895880, 'Ratchet & Clank: Rift Apart', 'D3DMetal', 'Silver', 'Frame drops during dimension shifts', 'DX12. MetalFX recommended for DLSS replacement.'),
+(1888930, 'The Last of Us Part I', 'D3DMetal', 'Silver', 'CPU-bound in open areas; shader stutter', 'DX12. D3DMetal required.'),
+(1649240, 'Returnal', 'D3DMetal', 'Silver', 'UE5 demanding; DXR on M3+', 'DX12. D3DMetal required.');
 
--- D3DMetal DXR games: Ghost of Tsushima
-INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, graphics_backend, env_vars, settings_notes) VALUES
-(2215430, 'D3DMetal', '{"D3DM_SUPPORT_DXR": "1"}', 'D3DMetal with DXR ray tracing on M3+.');
-
--- Alan Wake 2: D3DMetal DX12
-INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, graphics_backend, env_vars, settings_notes) VALUES
-(2118960, 'D3DMetal', '{"D3DM_SUPPORT_DXR": "1"}', 'DX12 only. D3DMetal with DXR on M3+.');
-
--- Ratchet & Clank: Rift Apart: D3DMetal with MetalFX
-INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, graphics_backend, env_vars, settings_notes) VALUES
-(1895880, 'D3DMetal', '{"D3DM_ENABLE_METALFX": "1"}', 'DX12. Enable MetalFX for DLSS replacement.');
-
--- The Last of Us Part I: D3DMetal
-INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, graphics_backend, settings_notes) VALUES
-(1888930, 'D3DMetal', 'DX12 only. D3DMetal required.');
-
--- Returnal: D3DMetal with DXR
-INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, graphics_backend, env_vars, settings_notes) VALUES
-(1649240, 'D3DMetal', '{"D3DM_SUPPORT_DXR": "1"}', 'DX12 / UE5. DXR on M3+.');
-
--- Control Ultimate: add D3DMetal DXR env var
-INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, graphics_backend, env_vars, settings_notes) VALUES
-(870780, 'D3DMetal', '{"D3DM_SUPPORT_DXR": "1"}', 'DX12. DXR on M3+.');
+-- D3DMetal DXR recommended settings
+-- Schema: game_recommended_settings (steam_app_id, msync_enabled, esync_enabled, rosetta_x87,
+--   async_shader, metalfx_upscaling, dxr_ray_tracing, fsr_enabled, large_address_aware,
+--   wine_dll_overrides, env_vars, windows_version, launch_args, auto_apply_patches)
+INSERT OR REPLACE INTO game_recommended_settings (steam_app_id, dxr_ray_tracing, env_vars) VALUES
+(2215430, 1, '{"D3DM_SUPPORT_DXR": "1"}'),
+(2118960, 1, '{"D3DM_SUPPORT_DXR": "1"}'),
+(1895880, 0, '{"D3DM_ENABLE_METALFX": "1"}'),
+(1888930, 0, '{}'),
+(1649240, 1, '{"D3DM_SUPPORT_DXR": "1"}'),
+(870780,  1, '{"D3DM_SUPPORT_DXR": "1"}');

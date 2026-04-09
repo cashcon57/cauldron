@@ -146,12 +146,12 @@ pub fn export_reports(conn: &Connection) -> Result<String, Box<dyn std::error::E
 
     let reports: Vec<CompatReport> = stmt
         .query_map([], |row| {
-            let status_str: String = row.get(3)?;
+            let status_str: String = row.get(2)?;  // index 2 = status column
             Ok(CompatReport {
                 game_id: row.get(0)?,
                 reporter_hash: row.get(1)?,
                 status: status_str.parse().unwrap_or(CompatStatus::Unknown),
-                backend_used: row.get(3)?,
+                backend_used: row.get(3)?,  // index 3 = backend column
                 fps_avg: row.get(4)?,
                 fps_min: None,
                 os_version: String::new(),
