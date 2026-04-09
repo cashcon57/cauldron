@@ -125,6 +125,27 @@ pub fn apply_fix_to_bottle(
 ) -> Result<Vec<String>> {
     let mut extra_args = Vec::new();
 
+    // Helper: validate a path is within the bottle to prevent traversal attacks
+    let validate_path = |path: &Path, bottle: &Path| -> Result<PathBuf> {
+        // Reject paths with .. components
+        for component in path.components() {
+            if matches!(component, std::path::Component::ParentDir) {
+                return Err(ProtonFixError::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("path traversal rejected: {}", path.display()),
+                )));
+            }
+        }
+        // Reject absolute paths
+        if path.is_absolute() {
+            return Err(ProtonFixError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("absolute path rejected: {}", path.display()),
+            )));
+        }
+        Ok(bottle.join(path))
+    };
+
     for action in &fix.actions {
         match action {
             FixAction::SetEnvVar { key, value } => {
@@ -180,7 +201,7 @@ pub fn apply_fix_to_bottle(
                 );
             }
             FixAction::CreateFile { path, content } => {
-                let full_path = bottle_path.join(path);
+                let full_path = validate_path(Path::new(path), bottle_path)?;
                 tracing::info!("creating file: {}", full_path.display());
                 if let Some(parent) = full_path.parent() {
                     fs::create_dir_all(parent)?;
@@ -188,8 +209,8 @@ pub fn apply_fix_to_bottle(
                 fs::write(&full_path, content)?;
             }
             FixAction::RenameFile { from, to } => {
-                let src = bottle_path.join(from);
-                let dst = bottle_path.join(to);
+                let src = validate_path(Path::new(from), bottle_path)?;
+                let dst = validate_path(Path::new(to), bottle_path)?;
                 tracing::info!("renaming {} -> {}", src.display(), dst.display());
                 if src.exists() {
                     if let Some(parent) = dst.parent() {
