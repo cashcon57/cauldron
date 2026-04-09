@@ -16,7 +16,6 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "5"
 sha2 = "0.10"
 toml = "0.8"
-reqwest = { version = "0.12", features = ["stream", "rustls-tls"], default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = "0.4"
 tempfile = "3"

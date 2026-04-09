@@ -98,7 +98,7 @@ impl BottleManager {
             }
         }
 
-        let now = chrono_like_timestamp();
+        let now = chrono::Utc::now().to_rfc3339();
 
         let bottle = Bottle {
             id,
@@ -225,60 +225,7 @@ impl BottleManager {
     }
 }
 
-/// Generate a simple ISO-8601-ish timestamp without pulling in chrono.
-pub fn chrono_like_timestamp() -> String {
-    use std::time::SystemTime;
-    let dur = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs();
-    // Simple UTC timestamp: days since epoch math
-    let days = secs / 86400;
-    let day_secs = secs % 86400;
-    let hours = day_secs / 3600;
-    let minutes = (day_secs % 3600) / 60;
-    let seconds = day_secs % 60;
-
-    // Compute year/month/day from days since epoch (1970-01-01)
-    let mut y = 1970i64;
-    let mut remaining = days as i64;
-    loop {
-        let year_days = if is_leap(y) { 366 } else { 365 };
-        if remaining < year_days {
-            break;
-        }
-        remaining -= year_days;
-        y += 1;
-    }
-    let leap = is_leap(y);
-    let month_days = [
-        31,
-        if leap { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
-    ];
-    let mut m = 0usize;
-    for (i, &md) in month_days.iter().enumerate() {
-        if remaining < md as i64 {
-            m = i;
-            break;
-        }
-        remaining -= md as i64;
-    }
-    let d = remaining + 1;
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        y,
-        m + 1,
-        d,
-        hours,
-        minutes,
-        seconds
-    )
-}
-
-fn is_leap(y: i64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
-}
+// Timestamp generation now uses chrono::Utc::now().to_rfc3339() directly.
 
 #[cfg(test)]
 mod tests {
@@ -362,19 +309,9 @@ mod tests {
     }
 
     #[test]
-    fn test_chrono_like_timestamp_format() {
-        let ts = chrono_like_timestamp();
-        // Should match ISO-8601 pattern: YYYY-MM-DDTHH:MM:SSZ
+    fn test_timestamp_format() {
+        let ts = chrono::Utc::now().to_rfc3339();
         assert!(ts.contains('T'));
-        assert!(ts.ends_with('Z'));
-        assert_eq!(ts.len(), 20);
-    }
-
-    #[test]
-    fn test_is_leap_year() {
-        assert!(is_leap(2000));
-        assert!(is_leap(2024));
-        assert!(!is_leap(1900));
-        assert!(!is_leap(2023));
+        assert!(ts.len() > 19);
     }
 }
