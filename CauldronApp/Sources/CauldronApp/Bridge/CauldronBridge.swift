@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-final class CauldronBridge: Sendable {
+final class CauldronBridge {
     static let shared = CauldronBridge()
 
     private nonisolated(unsafe) var managerPtr: UnsafeMutableRawPointer?
