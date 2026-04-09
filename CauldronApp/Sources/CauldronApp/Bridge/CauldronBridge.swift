@@ -364,19 +364,7 @@ final class CauldronBridge {
     /// Import a discovered bottle by symlinking it into Cauldron's managed directory.
     /// Returns the imported Bottle on success, nil on failure.
     func importBottle(sourcePath: String, name: String) -> Bottle? {
-        // Debug to file since GUI apps buffer stdout
-        let log = { (msg: String) in
-            let path = "/tmp/cauldron_bridge_debug.log"
-            let existing = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-            try? (existing + msg + "\n").write(toFile: path, atomically: true, encoding: .utf8)
-        }
-        log("importBottle called: sourcePath=\(sourcePath) name=\(name)")
-
-        guard let ptr = managerPtr else {
-            log("managerPtr is nil!")
-            return nil
-        }
-        log("managerPtr OK")
+        guard let ptr = managerPtr else { return nil }
         let jsonPtr = sourcePath.withCString { srcCStr in
             name.withCString { nameCStr in
                 cauldron_import_bottle(ptr, srcCStr, nameCStr)
@@ -386,15 +374,7 @@ final class CauldronBridge {
             print("[CauldronBridge] importBottle: got nil from FFI")
             return nil
         }
-        log("importBottle JSON: \(resultString.prefix(500))")
-
-        let bottle: Bottle? = decodeJSON(resultString)
-        if bottle == nil {
-            log("DECODE FAILED for Bottle type")
-        } else {
-            log("DECODE OK: \(bottle!.name)")
-        }
-        return bottle
+        return decodeJSON(resultString)
     }
 
     // MARK: - RosettaX87

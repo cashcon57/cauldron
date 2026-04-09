@@ -737,9 +737,6 @@ pub extern "C" fn cauldron_launch_exe(
     let backend_str = backend_str.as_str();
 
     tracing::info!(bottle_id = %bid, exe = %exe, backend = %backend_str, "FFI: launching exe");
-    // Temp debug log
-    let _ = std::fs::write("/tmp/cauldron-bridge-launch.log",
-        format!("bid={} exe={} backend={}\n", bid, exe, backend_str));
 
     // Find the bottle
     let bottles = match engine.bottle_manager.list() {
