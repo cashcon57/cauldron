@@ -14,8 +14,9 @@ enum JWTValidator {
         let cid: String?       // stripe customer id (nil for trial)
     }
 
-    /// Validate a JWT string and return its claims if the signature is valid.
-    static func validate(_ jwt: String, publicKey: Curve25519.Signing.PublicKey) -> Claims? {
+    /// Validate a JWT string and return its claims if the signature is valid
+    /// and the receipt belongs to this machine.
+    static func validate(_ jwt: String, publicKey: Curve25519.Signing.PublicKey, machineId: String? = nil) -> Claims? {
         let parts = jwt.split(separator: ".")
         guard parts.count == 3 else { return nil }
 
@@ -32,6 +33,11 @@ enum JWTValidator {
 
         // Decode claims
         guard let claims = try? JSONDecoder().decode(Claims.self, from: payloadData) else {
+            return nil
+        }
+
+        // Verify the receipt belongs to this machine (if machineId provided)
+        if let expectedMachineId = machineId, claims.sub != expectedMachineId {
             return nil
         }
 

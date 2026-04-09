@@ -3,7 +3,7 @@
 # Applies patches cumulatively in priority order, commits each, stops on conflict.
 #
 # Run on CI machine after cloning all sources to /tmp/cauldron-series/
-set -uo pipefail
+set -euo pipefail
 
 WINE="/tmp/cauldron-series/wine"
 STAGING="/tmp/cauldron-series/staging"

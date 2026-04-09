@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # audit_all_11.6.sh — Test all patch sources against Wine 11.6
-set -uo pipefail
+set -euo pipefail
 
 W="/tmp/cauldron-audit2/wine-base"
 RESULTS="/tmp/cauldron-audit2/all-results.txt"

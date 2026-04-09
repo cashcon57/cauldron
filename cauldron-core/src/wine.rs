@@ -147,10 +147,12 @@ impl WineRunner {
             "Environment assembled for Wine process"
         );
 
+        // Capture Wine stderr for debugging (never suppress errors)
         let child = Command::new(&self.wine_bin)
             .arg(exe_path)
             .args(args)
             .envs(&env_vars)
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| {
                 tracing::error!(exe = %exe_path.display(), error = %e, "Failed to spawn Wine process");

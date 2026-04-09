@@ -76,6 +76,7 @@ struct CreateBottleView: View {
                     .glassEffect(.regular.interactive(), in: .capsule)
 
                     Button {
+                        // TODO: pass graphicsBackend through when bridge supports it
                         viewModel.createBottle(name: name, wineVersion: selectedWineVersion)
                         dismiss()
                     } label: {

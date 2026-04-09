@@ -1,3 +1,6 @@
+// Canonical Wine registry writer — all user.reg modifications should go through
+// this module to avoid conflicting with other registry-writing code paths.
+
 use std::fmt;
 use std::path::{Path, PathBuf};
 use thiserror::Error;

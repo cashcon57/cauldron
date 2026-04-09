@@ -111,12 +111,13 @@ final class LicenseManager {
             return
         }
 
-        // Validate JWT signature
+        // Validate JWT signature and machine ID
+        let myMachineId = MachineIdentifier.id
         guard let publicKey = activationPublicKey,
-              let claims = JWTValidator.validate(receipt.jwt, publicKey: publicKey) else {
+              let claims = JWTValidator.validate(receipt.jwt, publicKey: publicKey, machineId: myMachineId) else {
             // Also try trial key
             if let trialKey = trialPublicKey,
-               let claims = JWTValidator.validate(receipt.jwt, publicKey: trialKey) {
+               let claims = JWTValidator.validate(receipt.jwt, publicKey: trialKey, machineId: myMachineId) {
                 validateClaims(claims, receipt: receipt, isTrial: true)
                 return
             }

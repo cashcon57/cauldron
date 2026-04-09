@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var showingDiscoveredBottles = false
     @State private var wineRunning = false
     @State private var wineCheckTask: Task<Void, Never>? = nil
+    @State private var bottleToDelete: Bottle? = nil
 
     var body: some View {
         @Bindable var vm = viewModel
@@ -26,7 +27,7 @@ struct ContentView: View {
                         }
                         .contextMenu {
                             Button(role: .destructive) {
-                                viewModel.deleteBottle(bottle)
+                                bottleToDelete = bottle
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -168,6 +169,21 @@ struct ContentView: View {
             }
         }
         .onDisappear { wineCheckTask?.cancel() }
+        .confirmationDialog(
+            "Delete Bottle",
+            isPresented: Binding(
+                get: { bottleToDelete != nil },
+                set: { if !$0 { bottleToDelete = nil } }
+            ),
+            presenting: bottleToDelete
+        ) { bottle in
+            Button("Delete \"\(bottle.name)\"", role: .destructive) {
+                viewModel.deleteBottle(bottle)
+                bottleToDelete = nil
+            }
+        } message: { bottle in
+            Text("This will permanently delete the Wine bottle \"\(bottle.name)\" and all its contents. This cannot be undone.")
+        }
         .onChange(of: viewModel.bottles) { _, newBottles in
             // If current selection is a deleted bottle, clear it
             if case .bottle(let b) = selectedItem, !newBottles.contains(where: { $0.id == b.id }) {
