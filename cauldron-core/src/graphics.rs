@@ -4,10 +4,21 @@ use std::path::PathBuf;
 
 /// Find the bundled runtime DLL directory for WINEDLLPATH.
 fn find_bundled_runtime_path(runtime: &str) -> Option<String> {
-    let candidates = [
-        PathBuf::from("/Users/cashconway/cauldron/deps/runtimes").join(runtime),
+    let mut candidates = vec![
         PathBuf::from("deps/runtimes").join(runtime),
     ];
+    // Try relative to the executable location (for installed app bundles)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent().and_then(|p| p.parent()) {
+            candidates.push(exe_dir.join("deps/runtimes").join(runtime));
+            candidates.push(exe_dir.join("Resources/runtimes").join(runtime));
+        }
+    }
+    // Try HOME-relative for development
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(&home).join("cauldron/deps/runtimes").join(runtime));
+    }
+    let candidates = candidates;
     for dir in &candidates {
         // DXMT uses x86_64-windows/, DXVK uses x64/
         let x64_win = dir.join("x86_64-windows");

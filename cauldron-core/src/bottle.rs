@@ -150,7 +150,19 @@ impl BottleManager {
 
     /// Delete a bottle by its ID.
     pub fn delete(&self, id: &str) -> Result<(), BottleError> {
+        // Path traversal protection: reject IDs with path separators or parent references
+        if id.contains('/') || id.contains('\\') || id.contains("..") || id.is_empty() {
+            tracing::error!(bottle_id = %id, "Rejecting bottle ID with path traversal characters");
+            return Err(BottleError::NotFound(id.to_string()));
+        }
         let bottle_path = self.bottles_dir.join(id);
+        // Verify the resolved path is actually inside bottles_dir
+        let canonical_bottles = self.bottles_dir.canonicalize().unwrap_or_else(|_| self.bottles_dir.clone());
+        let canonical_bottle = bottle_path.canonicalize().unwrap_or_else(|_| bottle_path.clone());
+        if !canonical_bottle.starts_with(&canonical_bottles) {
+            tracing::error!(bottle_id = %id, "Bottle path escapes bottles directory");
+            return Err(BottleError::NotFound(id.to_string()));
+        }
         if !bottle_path.exists() {
             tracing::error!(bottle_id = %id, "Cannot delete bottle: not found");
             return Err(BottleError::NotFound(id.to_string()));
