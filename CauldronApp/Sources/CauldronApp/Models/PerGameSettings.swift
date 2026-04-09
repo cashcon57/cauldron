@@ -40,7 +40,8 @@ final class PerGameSettings {
         rosettaX87Enabled != nil || asyncShaderCompilation != nil ||
         metalFXSpatialUpscaling != nil || dxrRayTracing != nil ||
         moltenVKArgumentBuffers != nil || metalPerformanceHUD != nil ||
-        fsrEnabled != nil || largeAddressAware != nil || autoApplyGamePatches != nil
+        fsrEnabled != nil || largeAddressAware != nil || autoApplyGamePatches != nil ||
+        highResolutionMode != nil || frameRateLimit != nil || heapZeroMemory != nil
     }
 
     /// Build the effective settings for this game by merging overrides onto the global profile.

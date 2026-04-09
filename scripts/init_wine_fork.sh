@@ -58,9 +58,9 @@ cd "$ROOT"
 # --- Step 3: Apply MSync patches (if available) ---
 if [[ -d "$MSYNC_DIR/.git" ]]; then
     echo "==> Applying wine-msync patches..."
-    MSYNC_PATCHES=$(find "$MSYNC_DIR" -name "*.patch" -o -name "*.diff" | sort)
     MSYNC_COUNT=0
-    for patch in $MSYNC_PATCHES; do
+    while IFS= read -r patch; do
+        [ -z "$patch" ] && continue
         if cd "$WINE_DIR" && git apply --check "$ROOT/$patch" 2>/dev/null; then
             git apply "$ROOT/$patch"
             git add -A
@@ -70,7 +70,7 @@ if [[ -d "$MSYNC_DIR/.git" ]]; then
             echo "    WARN: Skipping $patch (does not apply cleanly)"
         fi
         cd "$ROOT"
-    done
+    done < <(find "$MSYNC_DIR" -name "*.patch" -o -name "*.diff" | sort)
     echo "    Applied $MSYNC_COUNT msync patches"
 else
     echo "==> No wine-msync submodule found, skipping"
@@ -82,14 +82,10 @@ if [[ -d "$PATCHES_DIR" ]]; then
     # Apply msync first — it's the largest patch (51 files) and most context-sensitive.
     # Other patches applied after msync may shift line numbers, but msync applied
     # first on clean upstream always succeeds.
-    CAULDRON_PATCHES=$(
-        # msync first
-        find "$PATCHES_DIR" -name "*msync*" | sort
-        # then everything else
-        find "$PATCHES_DIR" -name "*.patch" ! -name "*msync*" | sort
-    )
     PATCH_COUNT=0
-    for patch in $CAULDRON_PATCHES; do
+    # Process patches via process substitution to handle spaces in paths
+    while IFS= read -r patch; do
+        [ -z "$patch" ] && continue
         PATCH_NAME=$(basename "$patch" .patch)
         echo "    Applying: $PATCH_NAME"
         cd "$WINE_DIR"
@@ -125,7 +121,7 @@ if [[ -d "$PATCHES_DIR" ]]; then
             fi
         fi
         cd "$ROOT"
-    done
+    done < <(find "$PATCHES_DIR" -name "*msync*" | sort; find "$PATCHES_DIR" -name "*.patch" ! -name "*msync*" | sort)
     echo "    Applied $PATCH_COUNT Cauldron patches"
 else
     echo "==> No Cauldron patches found"

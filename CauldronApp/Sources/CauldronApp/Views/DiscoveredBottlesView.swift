@@ -234,14 +234,7 @@ struct DiscoveredBottlesView: View {
         }
     }
 
-    private func debugLog(_ msg: String) {
-        let path = "/tmp/cauldron_bridge_debug.log"
-        let existing = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-        try? (existing + msg + "\n").write(toFile: path, atomically: true, encoding: .utf8)
-    }
-
     private func importBottle(_ bottle: DiscoveredBottle) {
-        debugLog("VIEW importBottle called: \(bottle.name) path=\(bottle.path)")
         let result = CauldronBridge.shared.importBottle(
             sourcePath: bottle.path,
             name: bottle.name
@@ -256,7 +249,7 @@ struct DiscoveredBottlesView: View {
     }
 
     private func importAll() {
-        debugLog("VIEW importAll called: \(discoveredBottles.count) bottles, \(importedPaths.count) already imported")
+        // Import all non-imported bottles
         for bottle in discoveredBottles where !importedPaths.contains(bottle.path) {
             let result = CauldronBridge.shared.importBottle(
                 sourcePath: bottle.path,

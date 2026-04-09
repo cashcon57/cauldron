@@ -98,6 +98,16 @@ pub fn init_db(path: &Path) -> Result<Connection, SchemaError> {
 /// Create all required tables if they do not already exist.
 pub fn run_migrations(conn: &Connection) -> Result<(), SchemaError> {
     tracing::info!("Running database migrations");
+
+    // Schema version tracking
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);"
+    )?;
+    let current_version: i64 = conn
+        .query_row("SELECT COALESCE(MAX(version), 0) FROM schema_version", [], |row| row.get(0))
+        .unwrap_or(0);
+    tracing::info!(current_version, "Current schema version");
+
     conn.execute_batch(CREATE_GAMES_TABLE)?;
     conn.execute_batch(CREATE_PROTON_COMMITS_TABLE)?;
     conn.execute_batch(CREATE_BACKEND_OVERRIDES_TABLE)?;
@@ -193,6 +203,13 @@ pub fn run_migrations(conn: &Connection) -> Result<(), SchemaError> {
          CREATE INDEX IF NOT EXISTS idx_proton_commits_classification ON proton_commits(classification);
          CREATE INDEX IF NOT EXISTS idx_game_deps_steam_app ON game_deps_installed(steam_app_id);"
     );
+
+    // Update schema version to current
+    let new_version: i64 = 1;
+    if current_version < new_version {
+        let _ = conn.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (?1)", [new_version]);
+        tracing::info!(version = new_version, "Schema version updated");
+    }
 
     tracing::info!("Migrations complete");
     Ok(())
