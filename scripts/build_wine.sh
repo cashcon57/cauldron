@@ -94,18 +94,18 @@ echo "==> Building Wine (${JOBS} jobs, x86_64)..."
 arch -x86_64 make -j"$JOBS" 2>&1 | tee "$ROOT/build/build.log" | tail -20
 
 # --- Preserve DXMT/DXVK overlay DLLs ---
-# make install overwrites these with Wine builtins. Back them up first.
+# make install overwrites these with Wine builtins. Back up from the RUNTIME dir
+# (where DXMT is actually installed) so we can restore after deploy.
 OVERLAY_BAK="$ROOT/build/.overlay-dlls"
 mkdir -p "$OVERLAY_BAK"
-for dll in $OVERLAY_DLLS; do
-    src="$INSTALL_DIR/lib/wine/x86_64-windows/$dll"
-    if [[ -f "$src" ]]; then
-        # Only back up if it's NOT a Wine builtin (check for .wine-orig marker)
-        if [[ -f "$src.wine-orig" ]] || [[ $(stat -f%z "$src" 2>/dev/null) -gt 5000000 ]]; then
+if [[ -d "$RUNTIME_DIR" ]]; then
+    for dll in $OVERLAY_DLLS; do
+        src="$RUNTIME_DIR/lib/wine/x86_64-windows/$dll"
+        if [[ -f "$src" && -f "$src.wine-orig" ]]; then
             cp "$src" "$OVERLAY_BAK/$dll"
         fi
-    fi
-done
+    done
+fi
 
 # --- Install ---
 echo "==> Installing to $INSTALL_DIR..."
@@ -126,10 +126,10 @@ add_rpaths() {
     local dir="$1"
     for f in "$dir/"*.so; do
         [[ -f "$f" ]] || continue
-        install_name_tool -add_rpath /usr/local/lib "$f" 2>/dev/null
-        install_name_tool -add_rpath /usr/local/opt/gnutls/lib "$f" 2>/dev/null
-        install_name_tool -add_rpath /usr/local/opt/freetype/lib "$f" 2>/dev/null
-        install_name_tool -add_rpath /usr/local/opt/gstreamer/lib "$f" 2>/dev/null
+        install_name_tool -add_rpath /usr/local/lib "$f" 2>/dev/null || true
+        install_name_tool -add_rpath /usr/local/opt/gnutls/lib "$f" 2>/dev/null || true
+        install_name_tool -add_rpath /usr/local/opt/freetype/lib "$f" 2>/dev/null || true
+        install_name_tool -add_rpath /usr/local/opt/gstreamer/lib "$f" 2>/dev/null || true
     done
 }
 
@@ -166,6 +166,14 @@ if $DEPLOY && [[ -d "$RUNTIME_DIR" ]]; then
 
         if ! $skip; then
             cp "$f" "$dest"
+        fi
+    done
+
+    # Restore backed-up DXMT/DXVK overlay DLLs into runtime
+    for dll in $OVERLAY_DLLS; do
+        if [[ -f "$OVERLAY_BAK/$dll" ]]; then
+            cp "$OVERLAY_BAK/$dll" "$RUNTIME_DIR/lib/wine/x86_64-windows/$dll"
+            echo "    Restored overlay DLL to runtime: $dll"
         fi
     done
 

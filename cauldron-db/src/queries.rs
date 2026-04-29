@@ -556,7 +556,8 @@ pub fn get_game_settings(conn: &Connection, app_id: u32) -> Result<Option<GameRe
         "SELECT steam_app_id, msync_enabled, esync_enabled, rosetta_x87, async_shader,
                 metalfx_upscaling, dxr_ray_tracing, fsr_enabled, large_address_aware,
                 wine_dll_overrides, env_vars, windows_version, launch_args, auto_apply_patches,
-                cpu_topology, required_dependencies, registry_entries, exe_override, audio_latency_ms
+                cpu_topology, required_dependencies, registry_entries, exe_override, audio_latency_ms,
+                hidpi_mode
          FROM game_recommended_settings WHERE steam_app_id = ?1",
     )?;
 
@@ -581,6 +582,7 @@ pub fn get_game_settings(conn: &Connection, app_id: u32) -> Result<Option<GameRe
             registry_entries: row.get::<_, String>(16).unwrap_or_else(|_| "[]".to_string()),
             exe_override: row.get(17)?,
             audio_latency_ms: row.get(18)?,
+            hidpi_mode: row.get::<_, Option<i32>>(19)?.map(|v| v != 0),
         })
     })?;
 
@@ -599,8 +601,9 @@ pub fn upsert_game_settings(conn: &Connection, settings: &GameRecommendedSetting
          (steam_app_id, msync_enabled, esync_enabled, rosetta_x87, async_shader,
           metalfx_upscaling, dxr_ray_tracing, fsr_enabled, large_address_aware,
           wine_dll_overrides, env_vars, windows_version, launch_args, auto_apply_patches,
-          cpu_topology, required_dependencies, registry_entries, exe_override, audio_latency_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+          cpu_topology, required_dependencies, registry_entries, exe_override, audio_latency_ms,
+          hidpi_mode)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         params![
             settings.steam_app_id,
             settings.msync_enabled.map(|b| b as i32),
@@ -621,6 +624,7 @@ pub fn upsert_game_settings(conn: &Connection, settings: &GameRecommendedSetting
             settings.registry_entries,
             settings.exe_override,
             settings.audio_latency_ms,
+            settings.hidpi_mode.map(|b| b as i32),
         ],
     )?;
     Ok(())

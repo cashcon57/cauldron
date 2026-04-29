@@ -1,284 +1,275 @@
 # Cauldron
 
-Bleeding-edge Windows game compatibility for macOS. Wine 11.6 fork with 131 patches from 9 sources.
+Windows-to-macOS game compatibility layer. Custom Wine fork, Rust core, SwiftUI frontend, DXMT/D3DMetal/DXVK graphics backends. Designed as an open-source spiritual successor to CrossOver.
 
-**[$30 — Buy](https://cauldron.app/buy)** | [Download](https://cauldron.app/download)
+> **Status:** Active development. Alpha. Individual games work (FO4 at 150fps, Skyrim SE with SKSE, Hogwarts Legacy with D3DMetal). UI is functional. Wine fork builds. Some systems (msync rewrite, GFXT adapter, Proton sync) are partial.
 
 ---
 
-## What is this
-
-Cauldron is a macOS app that runs Windows games. It's like CrossOver, but:
-
-- **Newer Wine base** — Wine 11.6 (dev) vs CrossOver's 9.x/10.x
-- **More patches** — 131 patches from wine-staging, Valve/Proton, proton-ge, CrossOver cherry-picks, and our own fixes
-- **Per-game intelligence** — Auto-applies optimal settings, DLL overrides, sync primitives, CPU topology, and binary patches per game from a curated database of 110+ titles
-- **Multiple graphics backends** — D3DMetal, DXMT, DXVK+MoltenVK, DXVK+KosmicKrisp, VKD3D-Proton
-- **Proton compat flag import** — Translates Valve's ~200 per-game flags to macOS equivalents automatically
-- **Automatic redistributable installation** — Auto-installs vcrun, d3dcompiler, media codecs per game on first launch
-- **Game binary patching** — Reversible GPU check/driver version fixes (pattern + offset modes, 28 games)
-- **RosettaX87 integration** — Optional 4-10x x87 FP acceleration for mod loaders and older games
-- **Runs CrossOver bottles directly** — no migration, no conversion, same bottles
-- **Open source** — LGPL (Wine patches) + source-available (app)
-
-Cauldron complements CrossOver. We recommend buying CrossOver for stability and D3DMetal access, then using Cauldron for bleeding-edge fixes on the same bottles.
-
-## How Cauldron compares
-
-| Feature | CrossOver | Proton (Linux) | Cauldron |
-|---------|-----------|----------------|----------|
-| Per-game runtime config | Graphics backend only | 354+ protonfixes scripts | DB-driven auto-config + protonfixes |
-| Proton compat flags | None | ~20 flags, ~200 app IDs | All flags translated to macOS |
-| CPU topology limiting | None | Env var per game | Auto from DB (Far Cry, DoW2, etc.) |
-| Auto-install redistributables | CrossTie install-time only | Per-game at runtime | Per-game at first launch |
-| Binary game patching | None | None | 28 games (4 verified, pattern + offset) |
-| Media codecs | Manual install | GStreamer integration | Auto-install quartz/lavfilters/wmp |
-| Sync primitives | msync | fsync/NTsync | msync + per-game disable |
-| Game database | Proprietary ratings | ProtonDB (community) | Open DB, 110+ games, NexusMods-ranked |
-| Audio latency per-game | None | None | STAGING_AUDIO_PERIOD auto-set |
-| Launcher bypasses | None | Exe redirects | Auto from DB (Borderlands, Bethesda, etc.) |
-| Windows version per-game | Manual per-bottle | Per-game in protonfixes | Auto from DB (AoE3→WinXP, etc.) |
-
 ## Architecture
 
-```
-SwiftUI (macOS 26+)  →  Rust core (FFI)  →  Cauldron Wine 11.6  →  Metal
-```
-
-| Layer | Lang | What |
-|-------|------|------|
-| UI | Swift/SwiftUI | Bottles, game library, per-game settings, patch triage, profile system |
-| Engine | Rust | Wine process management, launch config resolver, game binary patching, dependency tracking, RosettaX87 |
-| Sync | Rust | Proton/CrossOver/staging patch monitoring, classification, auto-adaptation, protonfixes import, config importer |
-| Database | Rust/SQLite | Game compatibility DB, recommended settings, binary patches, dependency tracking, Proton commit log |
-| Runtime | C | Wine fork, DXVK-macOS, MoltenVK, DXMT, D3DMetal |
-
-### Launch flow
-
-```
-User clicks Play
-  → Swift UI calls cauldron_launch_exe (FFI bridge)
-  → detect_steam_app_id() from exe path
-  → launch_config_resolver::resolve() merges 3 layers:
-      Layer 1: DB game_recommended_settings (per-game optimal config)
-      Layer 2: Protonfixes actions (env vars, DLL overrides, launch args)
-      Layer 3: User per-game overrides from UI (highest priority)
-  → config.apply_to_env() sets:
-      WINEMSYNC/WINEESYNC, WINE_CPU_TOPOLOGY, WINEDLLOVERRIDES,
-      STAGING_AUDIO_PERIOD, WINE_LARGE_ADDRESS_AWARE, DXVK_CUSTOM_VENDOR_ID, etc.
-  → apply exe_replacement if set (launcher bypasses)
-  → write windows_version to Wine registry if set
-  → auto-install required_dependencies if missing
-  → apply binary patches if auto_apply_patches=true
-  → spawn Wine process
+```text
+┌─────────────────────────────────────────────────────────┐
+│ SwiftUI frontend (CauldronApp/)                         │
+│   Bottles · Game library · Settings · Patch triage      │
+└────────────────────────┬────────────────────────────────┘
+                         │ C FFI (40+ exported fns)
+┌────────────────────────▼────────────────────────────────┐
+│ Rust core                                               │
+│   cauldron-bridge/  — FFI surface, launch orchestration │
+│   cauldron-core/    — Wine/bottle mgmt, launch resolver │
+│   cauldron-sync/    — Proton upstream sync pipeline     │
+│   cauldron-db/      — SQLite schema + queries           │
+│   cauldron-cli/     — CLI surface for the same engine   │
+└────────────────────────┬────────────────────────────────┘
+                         │ spawns wine process
+┌────────────────────────▼────────────────────────────────┐
+│ Cauldron Wine fork  (wine/, patched from Wine 11.6)     │
+│   + DXMT (D3D11→Metal)                                  │
+│   + D3DMetal (closed, bundled from CrossOver runtime)   │
+│   + DXVK-macOS (DX9–11→Vulkan→MoltenVK)                 │
+│   + vkd3d-proton (DX12→Vulkan, experimental)            │
+│   + winemetal.dll (Cauldron Metal bridge stub)          │
+└─────────────────────────────────────────────────────────┘
 ```
 
-## Features
+### Crate layout
 
-### Per-Game Intelligence Engine
+| Crate | Purpose | Notable modules |
+| --- | --- | --- |
+| [`cauldron-bridge`](cauldron-bridge/src/lib.rs) | `#[no_mangle]` FFI surface called from Swift | `cauldron_launch_exe`, `detect_steam_app_id` (ACF parser), registry entry application, exe_override wiring |
+| [`cauldron-core`](cauldron-core/src/) | Engine: Wine mgmt, bottle lifecycle, launch orchestration | [`launch_config_resolver`](cauldron-core/src/launch_config_resolver.rs), [`registry`](cauldron-core/src/registry.rs), [`graphics`](cauldron-core/src/graphics.rs), [`game_scanner`](cauldron-core/src/game_scanner.rs), [`game_patches`](cauldron-core/src/game_patches.rs), [`rosettax87`](cauldron-core/src/rosettax87.rs), [`wine_builder`](cauldron-core/src/wine_builder.rs) |
+| [`cauldron-sync`](cauldron-sync/src/) | Proton/Wine upstream sync pipeline | [`monitor`](cauldron-sync/src/monitor.rs) (git polling), [`classifier`](cauldron-sync/src/classifier.rs), [`auto_adapter`](cauldron-sync/src/auto_adapter.rs), [`config_importer`](cauldron-sync/src/config_importer.rs), [`protonfixes`](cauldron-sync/src/protonfixes.rs) |
+| [`cauldron-db`](cauldron-db/src/) | SQLite — schema, models, queries | 10 tables, idempotent migrations |
+| [`cauldron-cli`](cauldron-cli/src/) | CLI wrapper around `cauldron-core` | — |
+| [`CauldronApp`](CauldronApp/Sources/CauldronApp/) | SwiftUI macOS app (macOS 26+) | [`Bridge/`](CauldronApp/Sources/CauldronApp/Bridge/) (Swift↔Rust), [`Views/`](CauldronApp/Sources/CauldronApp/Views/), [`Models/`](CauldronApp/Sources/CauldronApp/Models/) |
 
-The launch config resolver automatically applies optimal settings when a game is detected. 110+ games are seeded with configurations covering:
+---
 
-- **Sync primitive control** — Disable msync/esync for games that crash with them (BioShock, Yakuza, Total War, Supreme Commander, Borderlands)
-- **CPU topology limiting** — `WINE_CPU_TOPOLOGY` for games that crash with high core counts (Far Cry series→16 cores, Dawn of War II→8, The Forest→4, Little Nightmares→1)
-- **Windows version override** — Per-game Wine version (Age of Empires 3→WinXP, Dark Souls PTDE→Win7)
-- **Vendor ID spoofing** — `DXVK_CUSTOM_VENDOR_ID=10de` to bypass GPU vendor checks without binary patching (HITMAN 3)
-- **DLL overrides** — Per-game native/builtin DLL selection
-- **Environment variables** — Arbitrary per-game env vars (DXVK_ASYNC, WINE_HEAP_DELAY_FREE, etc.)
-- **Launch arguments** — Per-game command-line args (-dx11, -fullscreen, --skip-version-check)
-- **Audio latency** — Per-game STAGING_AUDIO_PERIOD for games with crackling audio (FF IX, Evil Within, Gothic)
-- **Launcher bypasses** — Auto-substitute broken launchers with actual game exe (Borderlands 2, Conan Exiles, Evil Genius 2)
-- **Required dependencies** — Auto-install vcrun, d3dcompiler, media codecs on first launch
+## Launch flow
 
-User per-game overrides always take priority. If a user has configured a game manually, DB settings won't override them.
+The core of the app. When the user clicks Play, everything in the launch pipeline runs from [`cauldron_launch_exe`](cauldron-bridge/src/lib.rs) in the bridge crate:
 
-### Proton Compat Config Import
+1. **Detect `steam_app_id`** from the exe path. Reads `steamapps/appmanifest_<id>.acf` and matches `installdir` against the game directory name. Falls back to a title-word heuristic for non-Steam layouts.
+2. **Resolve launch config** via [`launch_config_resolver::resolve()`](cauldron-core/src/launch_config_resolver.rs) — merges three layers in priority order:
+   - Layer 1: `games.wine_overrides` JSON (legacy seed data)
+   - Layer 2: `game_recommended_settings` table (structured per-game config)
+   - Layer 3: `UserLaunchOverrides` from the UI (highest priority)
+3. **Apply env vars** — `WINEMSYNC`, `WINEESYNC`, `WINE_CPU_TOPOLOGY`, `STAGING_AUDIO_PERIOD`, `WINE_LARGE_ADDRESS_AWARE`, `DXVK_CUSTOM_VENDOR_ID`, graphics backend vars, DLL overrides into `WINEDLLOVERRIDES`
+4. **Apply `exe_replacement`** — swap the user-launched exe for a different one (e.g. `SkyrimSELauncher.exe` → `skse64_loader.exe`, `Borderlands2.exe` → `Binaries/Win32/Borderlands2.exe`)
+5. **Write `windows_version`** — per-game Wine version via a dropped `.cauldron_winver.reg` file
+6. **Apply `registry_entries`** — arbitrary per-game registry keys (e.g. macdrv `RetinaMode`, per-app `Mac Driver` options, compatibility flags). Typed via `RegistryHive` + `RegValueType`. Uses [`registry::set_value`](cauldron-core/src/registry.rs).
+7. **Stage DXMT/DXVK DLLs** — copies `d3d11.dll`, `d3d10core.dll`, `dxgi.dll`, `winemetal.dll` into the game directory; sets per-app native/builtin DLL overrides in `user.reg`
+8. **Protect `steamwebhelper.exe`** — forces it back to builtin d3d11 so Steam's CEF process doesn't try to load DXMT
+9. **HiDPI mode** — if enabled (global toggle or per-game DB flag), writes `HKCU\Software\Wine\Mac Driver\RetinaMode=y` so Wine's macdrv reports physical pixels instead of logical points on Retina displays
+10. **Spawn Wine** — finds the Wine binary (prefers Cauldron's built binary at `~/Library/Cauldron/wine/bin/wine64`, falls back to `~/Library/Cauldron/wine/`, `/usr/local/bin`, `/opt/homebrew/bin`, and system Wine app bundles)
 
-Imports Valve's `default_compat_config()` (~200 app IDs) and translates all flags to macOS equivalents:
+The Swift side passes settings to Rust as a JSON blob through the `backend` parameter — see [`LaunchSettings`](CauldronApp/Sources/CauldronApp/Bridge/CauldronBridge.swift) and its Rust parser in `cauldron_launch_exe`.
 
-| Proton Flag | macOS Translation |
-|---|---|
-| `gamedrive` | Wine drive letter symlink to game directory |
-| `heapdelayfree` | `WINE_HEAP_DELAY_FREE=1` |
-| `heapzeromemory` | `WINE_HEAP_ZERO_MEMORY=1` |
-| `nofsync`/`noesync` | Disable msync/esync in game_recommended_settings |
-| `forcelgadd` | `WINE_LARGE_ADDRESS_AWARE=1` |
-| `hidenvgpu` | `WINE_HIDE_NVIDIA_GPU=1` |
-| `disablenvapi` | `DXVK_ENABLE_NVAPI=0` + nvapi DLL overrides |
-| `nomfdxgiman` | `WINE_DISABLE_MF_DXGI_MANAGER=1` |
-| `cmdlineappend:arg` | Appended to game launch args |
-| `noopwr` | Set for compat (primarily Wayland-specific) |
-| `xalia` | Skipped (X11/Wayland-only) |
+---
 
-Imported configs are written into `game_recommended_settings` so the launch config resolver applies them automatically. Conditional updates never overwrite user customizations.
+## Graphics backends
 
-### Game Binary Patching
+| Backend | Translates | Underlying | Status |
+| --- | --- | --- | --- |
+| DXMT | D3D11 | Metal (native) | Primary — works for most DX11 titles |
+| D3DMetal | D3D11/12 | Metal (native) | Bundled from CrossOver's closed runtime; higher compat for AAA DX12 |
+| DXVK-macOS | D3D9/10/11 | Vulkan → MoltenVK → Metal | Fallback for games DXMT can't handle |
+| DXVK+KosmicKrisp | D3D9/10/11 | Vulkan 1.3 → Metal 4 (Mesa) | Experimental, tracks KosmicKrisp |
+| vkd3d-proton | D3D12 | Vulkan → MoltenVK | Experimental, for DX12 via MoltenVK path |
 
-Reversible binary patches for games with GPU capability checks, driver version checks, or DirectX feature checks that fail under Wine/Metal. Two modes:
+Backend selection is automatic based on the game's PE import table ([`game_scanner`](cauldron-core/src/game_scanner.rs)) — badges in the UI show every detected graphics API. The auto-select logic picks the preferred backend per detected API; users can override globally or per-game.
 
-- **Pattern mode** — Hex pattern search with `??` wildcards, works across game versions
-- **Offset mode** — Fixed byte offset writes with SHA-256 hash verification, for .NET DLLs and version-specific patches
+DXMT and DXVK DLLs are staged into the game directory before launch. Per-app `HKCU\Software\Wine\AppDefaults\<exe>\DllOverrides` keys force them to load as `native,builtin`. `steamwebhelper.exe` gets the opposite override (`builtin`) to keep Steam's CEF sandbox happy.
 
-28 games have built-in patches (4 verified against actual binaries, 24 based on common engine patterns). Inspired by [cbusillo/macos-game-patches](https://github.com/cbusillo/macos-game-patches) and [timkurvers/macos-game-patches](https://github.com/timkurvers/macos-game-patches). Patches are also stored in SQLite for OTA updates without app rebuilds.
+---
 
-### Optimization Profiles
+## Wine fork
 
-Three global profiles configure all settings at once:
+The Wine source lives at `wine/` (initialized via [`scripts/init_wine_fork.sh`](scripts/init_wine_fork.sh)), based on upstream Wine 11.6. Patches live in [`patches/`](patches/):
 
-| | Stable | Preview | Bleeding Edge |
-|---|---|---|---|
-| RosettaX87 | Off | On | On |
-| MetalFX Upscaling | Off | On | On |
-| DXR Ray Tracing | Off | Off | On |
-| Auto-Apply Game Patches | Off | Off | On |
-| Nightly Patches | Hidden | Hidden | Shown |
-| Sync Interval | 24h | 6h | 1h |
-| Performance Monitoring | Off | Off | On |
+- [`patches/cauldron/`](patches/cauldron/) — Cauldron's own patches
+  - `0001-ntdll-Preserve-private-pages-on-VirtualProtect.patch` — COW preservation fix; required for SKSE / F4SE / mod loaders that `VirtualProtect` their own code pages
+  - `0003-winemac-drv-reduce-compositor-flicker.patch` — macdrv flicker reduction
+  - `0004-ntdll-prefer-native-dlls-from-app-directory.patch` — changes Wine's loader search order so DXMT DLLs staged next to the game exe always win
+- [`patches/rosetta/`](patches/rosetta/) — CrossOver hack series adapted for Rosetta
+- [`patches/PATCH_AUDIT.md`](patches/PATCH_AUDIT.md) — per-patch provenance, conflict status, stability notes
 
-Per-game overrides can customize any setting. The UI warns when a game's settings diverge from the active profile.
+Build with `make wine-build`. The fork targets `arch -x86_64` Rosetta builds (Apple Silicon native builds are tracked but not primary). See [`scripts/build_wine.sh`](scripts/build_wine.sh).
 
-### Graphics API Auto-Detection
+**Always compile-check C changes with `arch -x86_64 gcc` before starting a full Wine build** — a full build takes ~20 minutes, a broken patch wastes all of it.
 
-Games are scanned via PE import table analysis to detect all linked graphics APIs (DX8-12, Vulkan, OpenGL). Each detected API is shown as a color-coded badge in the game library. The auto-select backend logic uses the detected API to choose the optimal translation path.
+---
 
-### RosettaX87
+## Per-game intelligence
 
-Optional integration with [WineAndAqua/rosettax87](https://github.com/WineAndAqua/rosettax87) for 4-10x faster x87 floating-point operations via patched Rosetta. Benefits mod loaders (SKSE, F4SE, NVSE) and older DX9 games.
+`game_recommended_settings` stores structured config per `steam_app_id`. The resolver reads it at launch and applies everything automatically. Current seed data covers ~45 games with explicit settings; the wider game DB (`games` table) covers ~30 titles with backend/compat metadata.
 
-### Dependency Auto-Installation
+Examples of what the resolver actually applies:
 
-19 winetricks verbs available for auto-installation:
+```sql
+-- Skyrim SE: use SKSE loader, fix macdrv cursor trailing
+INSERT INTO game_recommended_settings (steam_app_id, exe_override, windows_version, registry_entries, ...)
+VALUES (489830, 'skse64_loader.exe', 'win10', '[{"hive":"HKCU","key":"Software\\\\Wine\\\\AppDefaults\\\\SkyrimSE.exe\\\\Mac Driver","name":"RetinaMode","reg_type":"REG_SZ","data":"n"}]', ...);
 
-| Category | Verbs |
-|----------|-------|
-| C++ Runtimes | vcrun2022, vcrun2019, vcrun2017 |
-| .NET | dotnet48, dotnet40 |
-| DirectX | d3dx9, d3dcompiler_47, dxvk |
-| Media Codecs | quartz, lavfilters, wmp9, wmp11, wmv9vcm, devenum, amstream |
-| Fonts | corefonts |
-| Audio | xact, faudio |
+-- Far Cry series: limit CPU topology (engine crashes with high core counts)
+INSERT INTO game_recommended_settings (steam_app_id, cpu_topology) VALUES (19900, '16:1');  -- Far Cry 2
 
-Dependencies are tracked per-bottle per-game in SQLite to prevent re-installation.
+-- Age of Empires 3: force WinXP mode
+INSERT INTO game_recommended_settings (steam_app_id, windows_version) VALUES (105450, 'winxp');
 
-### Extended Protonfixes
+-- HITMAN 3: spoof NVIDIA vendor ID + skip version check
+INSERT INTO game_recommended_settings (steam_app_id, env_vars, launch_args)
+VALUES (1659040, '{"DXVK_CUSTOM_VENDOR_ID": "10de"}', '--skip-version-check');
 
-Parses 354+ umu-protonfixes Python scripts and supports 11 action types:
-
-`InstallVerb`, `AppendArgument`, `ReplaceCommand`, `SetEnvVar`, `DllOverride`, `DisableNvapi`, `CreateFile`, `RenameFile`, `DeleteFile`, `CopyFile`, `SetRegistry`
-
-## Wine Fork
-
-`patches/` contains our Wine patch series. 131 patches on Wine 11.6, zero conflicts:
-
-| Source | Patches | What |
-|--------|---------|------|
-| wine-staging | 58 | macOS flicker fix, wined3d, ntdll perf, D3DX9 stubs |
-| Valve/Proton | 24 | API stubs, GPU detection, audio, media framework |
-| openglfreak | 18 | QPC performance counters, TLS/crypto, spec fixes |
-| arm64ec | 12 | dwmapi stubs, jscript, keyboard locale |
-| Wine GitLab MRs | 7 | Mach COW write watches, surface optimization, GPU ID |
-| proton-ge | 5 | D2D crash fix, ntoskrnl stubs |
-| wine-tkg | 4 | CSMT toggle, Steam integration |
-| CrossOver | 2 | Apple Silicon display mode, mach_continuous_time |
-| Cauldron | 1 | VirtualProtect COW fix (SKSE/mod loader compat) |
-
-See [`patches/PATCH_AUDIT.md`](patches/PATCH_AUDIT.md) for the full audit.
-
-## Building from source
-
-```
-make build
-make swift-build
-make wine-init
-make wine-build
+-- Borderlands 2: bypass broken launcher
+UPDATE game_recommended_settings SET exe_override = 'Binaries/Win32/Borderlands2.exe' WHERE steam_app_id = 49520;
 ```
 
-Requires: Rust stable, Swift 6.2+, macOS 26+, Xcode CLI tools. Wine build additionally needs `brew install bison flex mingw-w64 gettext pkg-config gnutls freetype`.
+Structured fields in `game_recommended_settings`:
 
-Self-builds are fully functional with no restrictions. Auto-updates are disabled on self-builds because we can't push signed updates to unsigned binaries.
+| Field | Purpose |
+| --- | --- |
+| `msync_enabled`, `esync_enabled` | Force-disable sync primitives for games that crash with them |
+| `cpu_topology` | `WINE_CPU_TOPOLOGY` — limit exposed cores/threads |
+| `windows_version` | Wine Windows version (winxp/win7/win10/win11) |
+| `env_vars` | Arbitrary env vars as JSON |
+| `wine_dll_overrides` | Per-game DLL overrides as JSON |
+| `launch_args` | Extra args appended to the game command line |
+| `required_dependencies` | JSON array of winetricks verbs to install on first launch |
+| `exe_override` | Path relative to the game dir — replaces the launched exe (launcher bypasses, SKSE, Vulkan renderers) |
+| `registry_entries` | JSON array of `{hive, key, name, reg_type, data}` objects applied before launch |
+| `audio_latency_ms` | `STAGING_AUDIO_PERIOD` for games with crackling audio |
+| `hidpi_mode` | Per-game override for Wine RetinaMode |
+| `rosetta_x87` | Force-enable RosettaX87 for mod loaders |
 
-## Project structure
+User per-game overrides (`UserLaunchOverrides`) layer on top and always win.
 
-```
-cauldron-core/               Rust — Core engine
-  src/
-    launch_config_resolver   Per-game config resolution (3-layer merge)
-    game_patches             Binary patching (pattern + offset modes)
-    game_scanner             PE import analysis, Steam manifest parsing
-    dependency_installer     Winetricks verb runner (19 verbs)
-    dependency_tracker       Per-bottle dependency tracking
-    wine                     Wine process management
-    graphics                 Backend selection, env var building
-    rosettax87               RosettaX87 detection and integration
-    bottle                   Bottle lifecycle management
-    registry                 Wine registry read/write
-    icon_processor           .exe icon extraction → .icns
-    shader_cache             Per-backend shader cache management
-    runtime_downloader       DXVK, DXMT, MoltenVK, vkd3d-proton downloads
+---
 
-cauldron-sync/               Rust — Proton sync pipeline
-  src/
-    config_importer          Proton compat config parser + macOS translator
-    protonfixes              umu-protonfixes script parser (11 action types)
-    monitor                  Git-based Proton commit polling
-    classifier               Commit classification by subsystem
-    auto_adapter             Linux→macOS code adaptation (3 tiers)
-    applicator               Patch application with conflict detection
+## Database schema
 
-cauldron-db/                 Rust — SQLite database layer
-  src/
-    schema                   9 tables, idempotent migrations
-    models                   GameRecord, GameRecommendedSettings, GameBinaryPatchRecord,
-                             ProtonCommit, CompatReportRecord
-    queries                  CRUD for all tables
-
-cauldron-bridge/             Rust — C FFI layer (40+ exported functions)
-cauldron-cli/                Rust — Command-line interface
-CauldronApp/                 Swift — SwiftUI macOS app
-  Sources/
-    Models/                  ConfigProfile, PerGameSettings, AppSettings
-    Views/                   BottleDetailView, GameLibraryView, SettingsView, etc.
-    Bridge/                  CauldronFFI, CauldronBridge (Swift↔Rust)
-    Licensing/               Activation, JWT validation
-
-db/                          SQLite migrations and seed data (110+ games)
-patches/                     Wine fork patch series (131 patches)
-scripts/                     Build scripts, CI helpers
-```
-
-### Database tables
+10 tables in [`cauldron-db/src/schema.rs`](cauldron-db/src/schema.rs), with idempotent `ALTER TABLE … ADD COLUMN` migrations for forward compat:
 
 | Table | Purpose |
-|-------|---------|
-| `games` | 110+ game records: backend, compat status, DX version, popularity rank |
-| `game_recommended_settings` | Per-game optimal config: sync, topology, env vars, DLL overrides, deps, registry, audio |
-| `game_binary_patches` | Binary patch definitions (pattern + offset modes, verified flag) |
-| `game_deps_installed` | Tracks installed dependencies per bottle per game |
-| `proton_commits` | Proton repository commits being tracked |
+| --- | --- |
+| `games` | Game records: title, backend, compat status, DX version, popularity rank, known issues |
+| `game_recommended_settings` | Structured per-game launch config (fields above) |
+| `game_binary_patches` | Binary patch definitions (pattern + offset modes, SHA-256 verified) |
+| `game_deps_installed` | Per-bottle per-game dependency tracking (prevents re-install) |
+| `proton_commits` | Proton/Wine upstream commits being tracked |
 | `proton_game_configs` | Imported Proton compat flags with macOS translations |
-| `backend_overrides` | User backend preferences per game |
-| `compatibility_reports` | Community compatibility reports |
+| `backend_overrides` | Per-game user backend preference |
+| `compatibility_reports` | Community compat reports |
 | `patch_log` | Wine patch application history |
-| `sync_status` | Proton sync pipeline state |
+| `sync_status` | Sync pipeline state |
 
-## Upstream Sources
+---
 
-Projects Cauldron builds on or tracks:
+## Building
+
+```bash
+make build          # cargo build --workspace
+make swift-build    # build CauldronApp
+make wine-init      # clone Wine fork + apply patches
+make wine-build     # full Wine build (~20 min on M3 Max)
+make               # default target
+```
+
+**Requirements:**
+
+- Rust stable (check `rust-toolchain.toml` if present)
+- Swift 6.2+ / Xcode 26+
+- macOS 26+ (deployment target)
+- Wine build deps: `brew install bison flex mingw-w64 gettext pkg-config gnutls freetype`
+
+The workspace compiles clean (`cargo check --workspace`). Two existing warnings are dead_code for in-progress UI wiring — ignore.
+
+**Running the Swift app from CLI:**
+
+```bash
+swift run --package-path CauldronApp
+```
+
+**Running the CLI:**
+
+```bash
+cargo run -p cauldron-cli -- <command>
+```
+
+---
+
+## Reverse engineering
+
+Some of Cauldron's interop work depends on understanding CrossOver's closed runtime (D3DMetal/GFXT). Notes live in [`docs/`](docs/) and (gitignored) `docs/re/`:
+
+- [`docs/CROSSOVER_D3DMETAL_ARCHITECTURE.md`](docs/CROSSOVER_D3DMETAL_ARCHITECTURE.md) — high-level map of D3DMetal binaries, entry points, COM vtables
+- [`docs/GFXT_ADAPTER_SPEC.md`](docs/GFXT_ADAPTER_SPEC.md) — GFXT adapter interface spec (derived from Ghidra analysis of CrossOver's `libGFXT.dylib`), PE stubs, `macdrv_functions` dispatch table
+
+Everything in `docs/re/` is excluded from git (`.gitignore`) to keep decompiled artifacts out of the public repo.
+
+---
+
+## Development workflow
+
+The project is built with heavy use of Claude Code and multi-agent worktrees. Concurrent agents implement isolated features (HiDPI mode, Proton importer, patch classifier) on separate branches via `git worktree`, and results are merged back into `main`.
+
+Local CI runs in an isolated `localci` macOS user over SSH — scripts in [`scripts/`](scripts/). This keeps Wine build tests and the main dev environment separate.
+
+---
+
+## Current state
+
+**Working:**
+
+- Bottle management (create, list, delete, discover CrossOver bottles in-place)
+- Game library with PE import scanning and auto-backend selection
+- Launch config resolver (3-layer merge: DB → recommended settings → user overrides)
+- Registry writes before launch (typed hive + value type)
+- Exe overrides (SKSE loader, Borderlands binaries, Vulkan renderers)
+- Appmanifest-based `steam_app_id` detection
+- HiDPI / RetinaMode toggle (global + per-game)
+- DXMT integration with staged DLLs + per-app registry overrides
+- Skyrim SE launching via SKSE with per-game fixes
+- Fallout 4 at 150fps (DXMT)
+- Wine fork builds cleanly on Wine 11.6 with the current patch series
+- Settings profiles (Stable / Preview / Bleeding Edge) with drift detection
+
+**Partial:**
+
+- msync rewrite — works for simple Wine ops; `steamwebhelper.exe` won't start with it enabled
+- Proton sync pipeline — monitor and classifier work; auto-adapter is tier-1 only
+- GFXT adapter — spec is recovered, implementation is stub-only
+- Game binary patching — 4 verified patches, the rest are pattern-based
+
+**Planned:**
+
+- Full GFXT adapter implementation (replace dependency on CrossOver's closed runtime)
+- vkd3d-proton integration for DX12
+- KosmicKrisp (Mesa Vulkan 1.3 on Metal 4) as a DXVK backend
+- Metal HUD wiring from Swift UI → Rust bridge → env var propagation
+- SSEEngineFixesForWine bundling
+
+---
+
+## Upstream projects
 
 | Project | Role |
-|---------|------|
-| [Gcenx/DXVK-macOS](https://github.com/Gcenx/DXVK-macOS) | macOS DXVK fork (our DX9-11 Vulkan backend) |
-| [3Shain/dxmt](https://github.com/3Shain/dxmt) | Metal-native DX11 (our DXMT backend) |
-| [marzent/wine-msync](https://github.com/marzent/wine-msync) | Mach semaphore sync for Wine |
-| [WineAndAqua/rosettax87](https://github.com/WineAndAqua/rosettax87) | x87 FP acceleration for Rosetta |
-| [cbusillo/macos-game-patches](https://github.com/cbusillo/macos-game-patches) | Game binary patch patterns |
-| [timkurvers/macos-game-patches](https://github.com/timkurvers/macos-game-patches) | Offset-based game patches |
+| --- | --- |
+| [Gcenx/DXVK-macOS](https://github.com/Gcenx/DXVK-macOS) | DXVK fork targeting macOS / MoltenVK |
+| [3Shain/dxmt](https://github.com/3Shain/dxmt) | D3D11→Metal (native, no Vulkan layer) |
+| [marzent/wine-msync](https://github.com/marzent/wine-msync) | Mach semaphore sync primitives |
+| [WineAndAqua/rosettax87](https://github.com/WineAndAqua/rosettax87) | Patched Rosetta for faster x87 FP |
 | [Open-Wine-Components/umu-protonfixes](https://github.com/Open-Wine-Components/umu-protonfixes) | Per-game fix scripts (354+ games) |
-| [Open-Wine-Components/umu-database](https://github.com/Open-Wine-Components/umu-database) | Title-to-UMU-ID lookup table |
+| [Open-Wine-Components/umu-database](https://github.com/Open-Wine-Components/umu-database) | Title → UMU ID lookup |
 | [KhronosGroup/MoltenVK](https://github.com/KhronosGroup/MoltenVK) | Vulkan on Metal |
-| KosmicKrisp (Mesa) | Vulkan 1.3 on Metal 4 (future) |
+| [cbusillo/macos-game-patches](https://github.com/cbusillo/macos-game-patches) | Binary patch patterns |
+| [timkurvers/macos-game-patches](https://github.com/timkurvers/macos-game-patches) | Offset-based game patches |
+
+---
 
 ## License
 
-Wine patches: LGPL-2.1 (required by Wine's license).
-Application code: Source-available. Official builds are $30.
+- Wine fork patches: **LGPL-2.1** (required by Wine)
+- Rust / Swift application code: see [`LICENSE`](LICENSE)
+- Third-party component licenses: [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES)

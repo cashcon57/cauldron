@@ -513,14 +513,7 @@ impl GameScanner {
     /// PE import table. Covers DX8-12, Vulkan, and OpenGL.
     pub fn detect_graphics_apis(exe_path: &Path) -> Vec<DetectedGraphicsAPI> {
         tracing::trace!(exe = %exe_path.display(), "Detecting graphics APIs via PE imports");
-        // Read only the first 64KB (PE headers + import table) to avoid OOM on large executables
-        let data = match std::fs::File::open(exe_path).and_then(|mut f| {
-            use std::io::Read;
-            let mut buf = vec![0u8; 65536];
-            let n = f.read(&mut buf)?;
-            buf.truncate(n);
-            Ok(buf)
-        }) {
+        let data = match fs::read(exe_path) {
             Ok(d) => d,
             Err(_) => return Vec::new(),
         };

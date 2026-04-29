@@ -29,6 +29,18 @@ cp target/release/libcauldron_bridge.dylib "${DMG_DIR}/${APP_NAME}.app/Contents/
 cp CauldronApp/.build/release/CauldronApp "${DMG_DIR}/${APP_NAME}.app/Contents/MacOS/${APP_NAME}" 2>/dev/null || echo "Note: Swift binary not found, skipping"
 cp target/release/cauldron "${DMG_DIR}/${APP_NAME}.app/Contents/MacOS/cauldron-cli" 2>/dev/null || echo "Note: CLI binary not found, skipping"
 
+# Rewrite dylib references to be bundle-relative so the app works when moved
+# (default linkage hardcodes the absolute path to the dev target/ dir).
+APP_BIN="${DMG_DIR}/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
+DYLIB="${DMG_DIR}/${APP_NAME}.app/Contents/Frameworks/libcauldron_bridge.dylib"
+if [[ -f "$APP_BIN" && -f "$DYLIB" ]]; then
+    OLD_PATH=$(otool -L "$APP_BIN" | awk '/libcauldron_bridge\.dylib/ {print $1; exit}')
+    if [[ -n "$OLD_PATH" && "$OLD_PATH" != "@executable_path"* ]]; then
+        install_name_tool -change "$OLD_PATH" @executable_path/../Frameworks/libcauldron_bridge.dylib "$APP_BIN"
+    fi
+    install_name_tool -id @executable_path/../Frameworks/libcauldron_bridge.dylib "$DYLIB"
+fi
+
 # Create Info.plist
 cat > "${DMG_DIR}/${APP_NAME}.app/Contents/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>

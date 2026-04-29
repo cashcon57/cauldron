@@ -82,6 +82,12 @@ if [[ -d "$PATCHES_DIR" ]]; then
     # Apply msync first — it's the largest patch (51 files) and most context-sensitive.
     # Other patches applied after msync may shift line numbers, but msync applied
     # first on clean upstream always succeeds.
+    CAULDRON_PATCHES=$(
+        # msync first
+        find "$PATCHES_DIR" -name "*msync*" | sort
+        # then everything else
+        find "$PATCHES_DIR" -name "*.patch" ! -name "*msync*" | sort
+    )
     PATCH_COUNT=0
     # Process patches via process substitution to handle spaces in paths
     while IFS= read -r patch; do

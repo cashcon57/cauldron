@@ -12,10 +12,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.applicationIconImage = image
         }
 
-        // Sync Metal HUD global defaults with saved preference on startup
-        let hudEnabled = UserDefaults.standard.bool(forKey: "metalPerformanceHUD")
-        let globalDefaults = UserDefaults(suiteName: UserDefaults.globalDomain)
-        globalDefaults?.set(hudEnabled, forKey: "MetalForceHudEnabled")
+        // Metal HUD is now scoped per-launch via MTL_HUD_ENABLED env var in the
+        // Rust launch pipeline (cauldron-bridge). No global defaults writes —
+        // those leaked the HUD into every Metal app on the system (Photoshop, etc.).
     }
 }
 
@@ -23,19 +22,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 struct CauldronApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var licenseManager = LicenseManager()
-    @State private var bottleListViewModel: BottleListViewModel
     private let bridge: CauldronBridge
 
     init() {
         bridge = CauldronBridge.shared
-        // Store the ViewModel as @State so it persists across body re-evaluations
-        _bottleListViewModel = State(initialValue: BottleListViewModel(bridge: CauldronBridge.shared))
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environment(bottleListViewModel)
+                .environment(BottleListViewModel(bridge: bridge))
                 .environment(licenseManager)
                 .sheet(isPresented: showActivationSheet) {
                     ActivationView()
