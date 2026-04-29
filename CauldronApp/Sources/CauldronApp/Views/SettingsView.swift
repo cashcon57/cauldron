@@ -341,6 +341,15 @@ private struct AdvancedSettingsTab: View {
                     }
                 }
 
+                settingsCard("Display") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("High Resolution Mode (Retina)", isOn: $settings.highResolutionMode)
+                        Text("Renders at the full physical pixel resolution on Retina displays. May increase GPU load significantly. Off by default.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 settingsCard("Metal Features") {
                     Toggle("Metal Performance HUD", isOn: $settings.metalPerformanceHUD)
                     Toggle("MetalFX Spatial Upscaling", isOn: $settings.metalFXSpatialUpscaling)

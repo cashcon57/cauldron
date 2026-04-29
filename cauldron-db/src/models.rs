@@ -158,6 +158,7 @@ pub struct GameRecommendedSettings {
     pub registry_entries: String,
     pub exe_override: Option<String>,
     pub audio_latency_ms: Option<i32>,
+    pub hidpi_mode: Option<bool>,
 }
 
 /// A record from the game_binary_patches table.

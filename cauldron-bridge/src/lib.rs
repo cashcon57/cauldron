@@ -702,6 +702,7 @@ pub extern "C" fn cauldron_launch_exe(
     exe_path: *const c_char,
     backend: *const c_char,
 ) -> i32 {
+    let hidpi_mode: i32 = 0; // legacy path; highResolution comes from JSON settings
     if mgr.is_null() {
         tracing::error!("cauldron_launch_exe called with null engine pointer");
         return -1;
@@ -725,18 +726,31 @@ pub extern "C" fn cauldron_launch_exe(
     let raw_backend = cstr_to_str(backend).unwrap_or("auto");
 
     // The Swift bridge sends either a plain string ("auto", "dxmt", "none")
-    // or a JSON settings object. Extract the backend field if it's JSON.
-    let backend_str = if raw_backend.starts_with('{') {
-        serde_json::from_str::<serde_json::Value>(raw_backend)
-            .ok()
+    // or a JSON settings object. Extract the backend and any other fields.
+    let (backend_str, caller_hidpi, caller_metal_hud) = if raw_backend.starts_with('{') {
+        let parsed = serde_json::from_str::<serde_json::Value>(raw_backend).ok();
+        let b = parsed
+            .as_ref()
             .and_then(|v| v.get("backend").and_then(|b| b.as_str().map(String::from)))
-            .unwrap_or_else(|| "auto".to_string())
+            .unwrap_or_else(|| "auto".to_string());
+        let hi = parsed
+            .as_ref()
+            .and_then(|v| v.get("highResolution").and_then(|h| h.as_bool()))
+            .unwrap_or(false);
+        let hud = parsed
+            .as_ref()
+            .and_then(|v| v.get("metalHud").and_then(|h| h.as_bool()))
+            .unwrap_or(false);
+        (b, hi, hud)
     } else {
-        raw_backend.to_string()
+        (raw_backend.to_string(), hidpi_mode != 0, false)
     };
     let backend_str = backend_str.as_str();
 
     tracing::info!(bottle_id = %bid, exe = %exe, backend = %backend_str, "FFI: launching exe");
+    // Temp debug log
+    let _ = std::fs::write("/tmp/cauldron-bridge-launch.log",
+        format!("bid={} exe={} backend={}\n", bid, exe, backend_str));
 
     // Find the bottle
     let bottles = match engine.bottle_manager.list() {
@@ -838,28 +852,26 @@ pub extern "C" fn cauldron_launch_exe(
             metalfx_spatial: false,
             metalfx_upscale_factor: 2.0,
             dlss_metalfx: false,
-            metal_hud: false,
+            metal_hud: caller_metal_hud,
             dxr_enabled: false,
             mvk_argument_buffers: true,
         };
         let gfx_env = cauldron_core::graphics::build_env_vars(&gfx_config);
         env_vars.extend(gfx_env);
     } else {
-        // Even for Steam (backend=none), set DXMT overrides so they propagate
-        // to child game processes launched via -applaunch. Steamwebhelper is
-        // protected by per-app registry override (builtin).
-        let default_gfx = cauldron_core::graphics::GraphicsConfig {
-            backend: cauldron_db::GraphicsBackend::Auto,
-            dxvk_async: true,
-            metalfx_spatial: false,
-            metalfx_upscale_factor: 2.0,
-            dlss_metalfx: false,
-            metal_hud: false,
-            dxr_enabled: false,
-            mvk_argument_buffers: true,
-        };
-        let gfx_env = cauldron_core::graphics::build_env_vars(&default_gfx);
-        env_vars.extend(gfx_env);
+        // Steam bootstrap launch (backend=none). Do NOT inject DXMT/DXVK
+        // WINEDLLOVERRIDES globally — that cascades to steamwebhelper.exe and
+        // the CEF subprocesses, which break on native d3d11/dxgi. Per-app
+        // registry overrides were insufficient to protect them in practice.
+        // Game processes launched via `-applaunch` will get graphics env set
+        // at the point of launch by whatever invoked Steam, or via per-app
+        // registry DllOverrides on the game exe.
+        //
+        // Still disable winemenubuilder to suppress dock icon spam.
+        env_vars.insert("WINEDLLOVERRIDES".to_string(), "winemenubuilder.exe=d".to_string());
+        if caller_metal_hud {
+            env_vars.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
+        }
     }
 
     // Add bottle env overrides
@@ -922,12 +934,75 @@ pub extern "C" fn cauldron_launch_exe(
                 }
             }
 
+            // Apply registry_entries: write each entry into the bottle's registry
+            // before launch. Used for per-game macdrv options, app-specific
+            // compatibility flags, etc.
+            for entry in &config.registry_entries {
+                let hive = match entry.hive.to_uppercase().as_str() {
+                    "HKCU" | "HKEY_CURRENT_USER" => cauldron_core::registry::RegistryHive::User,
+                    "HKLM" | "HKEY_LOCAL_MACHINE" => cauldron_core::registry::RegistryHive::System,
+                    _ => {
+                        tracing::warn!(hive = %entry.hive, "Unknown registry hive, skipping");
+                        continue;
+                    }
+                };
+                let reg_type = match entry.reg_type.to_uppercase().as_str() {
+                    "REG_SZ" | "SZ" | "STRING" => cauldron_core::registry::RegValueType::String,
+                    "REG_DWORD" | "DWORD" => cauldron_core::registry::RegValueType::Dword,
+                    "REG_BINARY" | "BINARY" => cauldron_core::registry::RegValueType::Binary,
+                    "REG_MULTI_SZ" | "MULTI_SZ" | "MULTI" => cauldron_core::registry::RegValueType::Multi,
+                    "REG_EXPAND_SZ" | "EXPAND_SZ" | "EXPAND" => cauldron_core::registry::RegValueType::Expand,
+                    _ => cauldron_core::registry::RegValueType::String,
+                };
+                if let Err(e) = cauldron_core::registry::set_value(
+                    &resolved_prefix,
+                    hive,
+                    &entry.key,
+                    &entry.name,
+                    reg_type,
+                    &entry.data,
+                ) {
+                    tracing::warn!(
+                        key = %entry.key,
+                        name = %entry.name,
+                        error = %e,
+                        "Failed to apply registry entry from launch config"
+                    );
+                } else {
+                    tracing::debug!(
+                        key = %entry.key,
+                        name = %entry.name,
+                        "Applied registry entry from launch config"
+                    );
+                }
+            }
+
             // Log required dependencies (actual installation is handled separately)
             if !config.required_dependencies.is_empty() {
                 tracing::info!(
                     deps = ?config.required_dependencies,
                     "Game requires dependencies"
                 );
+            }
+
+            // Apply HiDPI / Retina mode: per-game DB setting takes precedence, then the
+            // global caller flag. Writing "y" to the Mac Driver RetinaMode key tells
+            // Wine's macdrv to set wantsBestResolutionOpenGLSurface so the window
+            // addresses physical pixels instead of logical points.
+            let want_hidpi = config.hidpi_mode == Some(true) || caller_hidpi;
+            if want_hidpi {
+                if let Err(e) = cauldron_core::registry::set_value(
+                    &resolved_prefix,
+                    cauldron_core::registry::RegistryHive::User,
+                    "Software\\\\Wine\\\\Mac Driver",
+                    "RetinaMode",
+                    cauldron_core::registry::RegValueType::String,
+                    "y",
+                ) {
+                    tracing::warn!("Failed to set RetinaMode registry key: {e}");
+                } else {
+                    tracing::info!("HiDPI/RetinaMode enabled for this launch");
+                }
             }
         }
     }
@@ -1076,26 +1151,108 @@ pub extern "C" fn cauldron_launch_exe(
 /// a known game in the database. Looks at the path for patterns like
 /// `steamapps/common/<game>/` and cross-references the DB.
 fn detect_steam_app_id(exe_path: &std::path::Path, conn: &cauldron_db::Connection) -> Option<u32> {
-    // Try to find a Steam app ID by scanning all known games and matching exe path components
-    let path_str = exe_path.to_string_lossy().to_lowercase();
+    let path_str = exe_path.to_string_lossy();
 
-    // Quick check: if path contains "steamapps" we can try to extract info
-    if !path_str.contains("steamapps") {
+    // Must be under a steamapps tree
+    if !path_str.to_lowercase().contains("steamapps") {
         return None;
     }
 
-    // List all games and see if any title matches a path component
+    // Strategy 1: find the steamapps directory and read appmanifest_<id>.acf files.
+    // Steam writes one ACF per installed game: steamapps/appmanifest_489830.acf
+    // The `installdir` field inside matches the directory under steamapps/common/.
+    // Walk up the path until we find a directory named "steamapps".
+    let steamapps_dir = {
+        let mut candidate = exe_path.parent();
+        let mut found = None;
+        while let Some(dir) = candidate {
+            if dir.file_name().and_then(|n| n.to_str())
+                .map(|n| n.to_lowercase() == "steamapps")
+                .unwrap_or(false)
+            {
+                found = Some(dir.to_path_buf());
+                break;
+            }
+            // Also check if this dir contains a "steamapps" child (handles
+            // paths like .../Steam/steamapps/common/Game/game.exe where we're
+            // currently inside common/Game)
+            if dir.join("steamapps").is_dir() {
+                found = Some(dir.join("steamapps"));
+                break;
+            }
+            candidate = dir.parent();
+        }
+        found
+    };
+
+    if let Some(ref sa_dir) = steamapps_dir {
+        // The game directory name is the component of the exe path that sits
+        // directly under steamapps/common/.
+        let common_dir = sa_dir.join("common");
+        let game_dir_name = exe_path.ancestors()
+            .find(|p| p.parent().map(|pp| pp == common_dir).unwrap_or(false))
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_lowercase());
+
+        if let Some(ref dir_name) = game_dir_name {
+            // Read all appmanifest_*.acf files and find the one whose installdir matches
+            if let Ok(entries) = std::fs::read_dir(sa_dir) {
+                for entry in entries.flatten() {
+                    let fname = entry.file_name();
+                    let fname_str = fname.to_string_lossy();
+                    if fname_str.starts_with("appmanifest_") && fname_str.ends_with(".acf") {
+                        // Extract the app ID from the filename
+                        let id_str = fname_str
+                            .trim_start_matches("appmanifest_")
+                            .trim_end_matches(".acf");
+                        let Ok(app_id) = id_str.parse::<u32>() else { continue };
+
+                        // Read the ACF and check installdir field
+                        if let Ok(contents) = std::fs::read_to_string(entry.path()) {
+                            for line in contents.lines() {
+                                let trimmed = line.trim();
+                                if trimmed.to_lowercase().starts_with("\"installdir\"") {
+                                    // Format: "installdir"		"Skyrim Special Edition"
+                                    if let Some(val) = trimmed
+                                        .splitn(2, '\t')
+                                        .nth(1)
+                                        .or_else(|| trimmed.splitn(3, '"').nth(3))
+                                    {
+                                        let install_dir = val.trim().trim_matches('"').to_lowercase();
+                                        if install_dir == *dir_name {
+                                            tracing::info!(
+                                                app_id,
+                                                install_dir = %install_dir,
+                                                "Detected steam_app_id from appmanifest ACF"
+                                            );
+                                            return Some(app_id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Strategy 2: title-word heuristic against the DB (fallback for non-Steam layouts)
+    let path_lower = path_str.to_lowercase();
     let games = cauldron_db::list_all_games(conn).ok()?;
     for game in &games {
         if let Some(app_id) = game.steam_app_id {
-            // Check if the settings table has an entry for this app_id
-            if let Ok(Some(_)) = cauldron_db::get_game_settings(conn, app_id) {
-                // Simple heuristic: game title words appear in the path
-                let title_lower = game.title.to_lowercase();
-                let title_words: Vec<&str> = title_lower.split_whitespace().collect();
-                if title_words.len() >= 2 && title_words.iter().all(|w| path_str.contains(w)) {
-                    return Some(app_id);
-                }
+            let title_lower = game.title.to_lowercase();
+            // Use only distinctive words (length >= 4, skip articles/prepositions)
+            let skip = ["the", "and", "for", "with", "of", "in", "a", "an", "at"];
+            let title_words: Vec<&str> = title_lower
+                .split_whitespace()
+                .filter(|w| w.len() >= 4 && !skip.contains(w))
+                .collect();
+            if title_words.len() >= 2 && title_words.iter().all(|w| path_lower.contains(w)) {
+                tracing::info!(app_id, "Detected steam_app_id via title heuristic");
+                return Some(app_id);
             }
         }
     }
@@ -1732,26 +1889,24 @@ pub extern "C" fn cauldron_list_dependencies(_mgr: *mut c_void) -> *mut c_char {
 pub extern "C" fn cauldron_install_dependency(_mgr: *mut c_void, _bid: *const c_char, _dep: *const c_char) -> *mut c_char {
     to_c_json(&serde_json::json!({"success": false, "error": "Not implemented"}))
 }
-/// Returns 1 if bottle is running, 0 if not, -1 on error.
-/// STUB: always returns 0 (not running) — needs proper process tracking.
 #[no_mangle]
-pub extern "C" fn cauldron_is_bottle_running(_mgr: *mut c_void, _bid: *const c_char) -> i32 {
-    // STUB: needs per-bottle process tracking
-    0
+pub extern "C" fn cauldron_is_bottle_running(_mgr: *mut c_void, _bid: *const c_char) -> *mut c_char {
+    to_c_json(&serde_json::json!({"running": false}))
 }
-/// Kill Wine processes for a bottle. Returns 0 on success, -1 on failure.
 #[no_mangle]
-pub extern "C" fn cauldron_kill_bottle(_mgr: *mut c_void, _bid: *const c_char) -> i32 {
+pub extern "C" fn cauldron_kill_bottle(_mgr: *mut c_void, _bid: *const c_char) -> *mut c_char {
+    // Use wineserver -k for graceful shutdown — properly deregisters dock icons
     let home = std::env::var("HOME").unwrap_or_default();
     let wineserver = format!("{}/Library/Cauldron/wine/bin/wineserver", home);
     let result = std::process::Command::new("sh")
         .args(["-c", &format!(
-            "{ws} -k; {ws} -w; sleep 1; \
-             if pgrep -f wineserver >/dev/null 2>&1; then {ws} -k9; sleep 1; fi; true",
+            "{ws} -k 2>/dev/null; {ws} -w 2>/dev/null; sleep 1; \
+             if pgrep -f wineserver >/dev/null 2>&1; then {ws} -k9 2>/dev/null; sleep 1; fi; true",
             ws = wineserver
         )])
         .output();
-    if result.is_ok() { 0 } else { -1 }
+    let killed = result.is_ok();
+    to_c_json(&serde_json::json!({"success": killed, "killed": if killed { 1 } else { 0 }}))
 }
 
 /// Switch a bottle's graphics backend (stub — backend switching now handled via env vars at launch).

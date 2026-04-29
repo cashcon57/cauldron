@@ -41,8 +41,20 @@ __pycache__/
 .vscode/
 *.sublime-*
 
+# Claude Code agent state
+.claude/
+
+# Log files
+*.log
+
 # Wine bottles (test data)
 *.wine/
+
+# Test variant binaries (built artifacts)
+tests/flicker/variants/
+
+# Editor workspace files (user-local paths)
+*.code-workspace
 
 # Database
 *.db

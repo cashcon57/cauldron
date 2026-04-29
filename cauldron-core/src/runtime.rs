@@ -629,9 +629,8 @@ impl RuntimeInstaller {
             // Relative to base_dir (App Support)
             self.runtimes_dir.parent().unwrap_or(&self.runtimes_dir)
                 .join("deps/runtimes").join(type_dir),
-            // HOME-relative (dev builds)
-            PathBuf::from(std::env::var("HOME").unwrap_or_default())
-                .join("cauldron/deps/runtimes").join(type_dir),
+            // Hardcoded project path (dev builds)
+            PathBuf::from("/Users/cashconway/cauldron/deps/runtimes").join(type_dir),
         ];
         // Relative to the executable (release app bundle)
         if let Some(ref exe) = exe_dir {

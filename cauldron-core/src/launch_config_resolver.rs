@@ -49,6 +49,9 @@ pub struct LaunchConfig {
     pub file_operations: Vec<FileOperation>,
     pub auto_apply_patches: Option<bool>,
     pub audio_latency_ms: Option<i32>,
+    /// When true, sets Wine's RetinaMode registry key so the game renders
+    /// at physical pixel resolution on Retina/HiDPI displays.
+    pub hidpi_mode: Option<bool>,
 }
 
 impl LaunchConfig {
@@ -257,6 +260,11 @@ pub fn resolve(
         if settings.audio_latency_ms.is_some() {
             config.audio_latency_ms = settings.audio_latency_ms;
         }
+
+        // hidpi_mode
+        if settings.hidpi_mode.is_some() {
+            config.hidpi_mode = settings.hidpi_mode;
+        }
     }
 
     // Layer 3: User overrides (highest priority)
@@ -345,6 +353,7 @@ mod tests {
             registry_entries: "[]".to_string(),
             exe_override: None,
             audio_latency_ms: None,
+            hidpi_mode: None,
         };
         cauldron_db::upsert_game_settings(&conn, &settings).unwrap();
 
@@ -392,6 +401,7 @@ mod tests {
             registry_entries: "[]".to_string(),
             exe_override: None,
             audio_latency_ms: None,
+            hidpi_mode: None,
         };
         cauldron_db::upsert_game_settings(&conn, &settings).unwrap();
 
@@ -424,6 +434,7 @@ mod tests {
             registry_entries: "[]".to_string(),
             exe_override: None,
             audio_latency_ms: None,
+            hidpi_mode: None,
         };
         cauldron_db::upsert_game_settings(&conn, &settings).unwrap();
 
@@ -463,6 +474,7 @@ mod tests {
             registry_entries: "[]".to_string(),
             exe_override: None,
             audio_latency_ms: None,
+            hidpi_mode: None,
         };
         cauldron_db::upsert_game_settings(&conn, &settings).unwrap();
 
@@ -498,6 +510,7 @@ mod tests {
             registry_entries: "[]".to_string(),
             exe_override: None,
             audio_latency_ms: None,
+            hidpi_mode: None,
         };
         cauldron_db::upsert_game_settings(&conn, &settings).unwrap();
 
@@ -529,6 +542,7 @@ mod tests {
             registry_entries: "[]".to_string(),
             exe_override: Some("FF9_Launcher.exe".to_string()),
             audio_latency_ms: Some(60),
+            hidpi_mode: None,
         };
         cauldron_db::upsert_game_settings(&conn, &settings).unwrap();
 

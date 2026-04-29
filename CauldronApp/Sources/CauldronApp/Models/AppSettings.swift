@@ -109,14 +109,7 @@ final class AppSettings {
 
     var metalPerformanceHUD: Bool {
         get { UserDefaults.standard.bool(forKey: "metalPerformanceHUD") }
-        set {
-            UserDefaults.standard.set(newValue, forKey: "metalPerformanceHUD")
-            // Metal HUD via global defaults — works through Wine/Rosetta/DXMT because
-            // Metal reads CFPreferences, not process env vars.
-            UserDefaults.standard.set(newValue, forKey: "MetalForceHudEnabled")
-            let globalDefaults = UserDefaults(suiteName: UserDefaults.globalDomain)
-            globalDefaults?.set(newValue, forKey: "MetalForceHudEnabled")
-        }
+        set { UserDefaults.standard.set(newValue, forKey: "metalPerformanceHUD") }
     }
 
     var asyncShaderCompilation: Bool {

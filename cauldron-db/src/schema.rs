@@ -161,6 +161,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), SchemaError> {
         "ALTER TABLE game_recommended_settings ADD COLUMN audio_latency_ms INTEGER;"
     );
 
+    // Migration: add hidpi_mode for Retina/HiDPI display support
+    let _ = conn.execute_batch(
+        "ALTER TABLE game_recommended_settings ADD COLUMN hidpi_mode INTEGER;"
+    );
+
     // Game binary patches table
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS game_binary_patches (
